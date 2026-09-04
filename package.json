@@ -1,0 +1,30 @@
+{
+  "name": "daojia-shuo-yisheng",
+  "version": "0.1.0",
+  "private": true,
+  "description": "到家说一声 - iOS-first family safety guardian app prototype.",
+  "main": "index.js",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "start": "react-native start",
+    "ios": "react-native run-ios"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "^3.1.1",
+    "@react-native-community/geolocation": "^3.4.0",
+    "react": "19.1.1",
+    "react-native": "0.82.0"
+  },
+  "devDependencies": {
+    "@react-native-community/cli": "^20.2.0",
+    "@react-native/babel-preset": "^0.87.0",
+    "@react-native/metro-config": "^0.87.0",
+    "@react-native/typescript-config": "^0.82.0",
+    "@types/jest": "^30.0.0",
+    "@types/react": "^19.1.16",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
