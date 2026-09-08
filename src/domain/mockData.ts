@@ -1,4 +1,4 @@
-import type { GuardianConfig, GuardianStatusSnapshot } from './types';
+import type { GuardianConfig, GuardianEvent, GuardianStatusSnapshot } from './types';
 
 export const guardianConfig: GuardianConfig = {
   geofences: [
@@ -48,7 +48,7 @@ export const guardianConfig: GuardianConfig = {
   },
 };
 
-export const statusSnapshot: GuardianStatusSnapshot = {
+const statusSnapshot: GuardianStatusSnapshot = {
   status: 'attention',
   headline: '需要留意',
   detail: '手机在果园附近停留较久，系统已先提醒本人确认。',
@@ -96,10 +96,10 @@ export const statusSnapshot: GuardianStatusSnapshot = {
       id: 'e5',
       type: 'LOW_BATTERY',
       title: '电量偏低',
-      description: '手机电量低于 25%，且仍在劳作地点附近。',
+      description: '手机电量低于 20%，且仍在劳作地点附近。',
       timestamp: '14:55',
       source: 'battery',
-      batteryLevel: 24,
+      batteryLevel: 18,
     },
     {
       id: 'e6',
@@ -108,7 +108,17 @@ export const statusSnapshot: GuardianStatusSnapshot = {
       description: '已在果园附近停留超过 2 小时，进入关注。',
       timestamp: '15:42',
       source: 'location',
-      batteryLevel: 24,
+      batteryLevel: 18,
     },
   ],
 };
+
+export function createDemoEvents(now = Date.now()): GuardianEvent[] {
+  return statusSnapshot.events.map((event, index, events) => ({
+    ...event,
+    id: `demo-${now}-${index}`,
+    timestamp: new Date(now - (events.length - index) * 60_000).toISOString(),
+    simulated: true,
+    locationLabel: index === 0 ? '家附近' : '果园附近',
+  }));
+}

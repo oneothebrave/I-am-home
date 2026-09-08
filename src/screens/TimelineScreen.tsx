@@ -4,6 +4,7 @@ import { Section } from '../components/Primitives';
 import type { EscalationState } from '../domain/escalation';
 import type { GuardianEvent } from '../domain/types';
 import { styles } from '../styles/appStyles';
+import { formatClockTime, formatEventTime } from '../utils/time';
 
 export function TimelineScreen({
   escalationState,
@@ -11,59 +12,71 @@ export function TimelineScreen({
   onAdvanceEscalation,
   onSimulateLocationLost,
   onSimulateReturnHome,
-  onSimulateRiskEscalated,
+  now,
+  canSimulate,
 }: {
   escalationState: EscalationState;
   events: GuardianEvent[];
   onAdvanceEscalation: () => void;
   onSimulateLocationLost: () => void;
   onSimulateReturnHome: () => void;
-  onSimulateRiskEscalated: () => void;
+  now: number;
+  canSimulate: boolean;
 }) {
   return (
     <>
-      <Section title="事件演练">
-        <View style={styles.exerciseRow}>
-          <TouchableOpacity activeOpacity={0.8} onPress={onSimulateReturnHome} style={styles.exerciseButton}>
-            <Text style={styles.exerciseButtonText}>模拟回家</Text>
-          </TouchableOpacity>
-          <TouchableOpacity activeOpacity={0.8} onPress={onSimulateLocationLost} style={styles.exerciseButton}>
-            <Text style={styles.exerciseButtonText}>模拟失联</Text>
-          </TouchableOpacity>
-        </View>
-        <TouchableOpacity activeOpacity={0.8} onPress={onSimulateRiskEscalated} style={styles.exerciseDangerButton}>
-          <Text style={styles.exerciseDangerText}>模拟通知家人</Text>
-        </TouchableOpacity>
-      </Section>
+      {canSimulate && (
+        <Section title="事件演练">
+          <View style={styles.exerciseRow}>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={onSimulateReturnHome}
+              style={styles.exerciseButton}
+            >
+              <Text style={styles.exerciseButtonText}>模拟回家</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={onSimulateLocationLost}
+              style={styles.exerciseButton}
+            >
+              <Text style={styles.exerciseButtonText}>模拟失联</Text>
+            </TouchableOpacity>
+          </View>
+        </Section>
+      )}
 
       <Section title="升级流程">
         <View style={styles.escalationPanel}>
           <Text style={styles.escalationTitle}>{escalationState.title}</Text>
           <Text style={styles.escalationDescription}>{escalationState.description}</Text>
           <Text style={styles.eventMeta}>
-            已通知 {escalationState.notifiedContacts.length} 位家人
+            已记录 {escalationState.notifiedCount} 位接收人
             {escalationState.nextContact ? ` · 下一位 ${escalationState.nextContact.name}` : ''}
           </Text>
         </View>
-        {escalationState.nextActionLabel ? (
+        {canSimulate && escalationState.nextActionLabel ? (
           <TouchableOpacity
             activeOpacity={0.8}
             onPress={onAdvanceEscalation}
-            style={styles.secondaryButton}>
+            style={styles.secondaryButton}
+          >
             <Text style={styles.secondaryButtonText}>{escalationState.nextActionLabel}</Text>
           </TouchableOpacity>
         ) : null}
       </Section>
 
-      <Section title="今天发生了什么">
-        {events.map(event => (
+      <Section title="守护记录">
+        {events.map((event) => (
           <View style={styles.eventRow} key={event.id}>
-            <Text style={styles.eventTime}>{event.timestamp}</Text>
+            <Text style={styles.eventTime}>{formatClockTime(event.timestamp)}</Text>
             <View style={styles.eventBody}>
               <Text style={styles.eventTitle}>{event.title}</Text>
               <Text style={styles.eventDescription}>{event.description}</Text>
               <Text style={styles.eventMeta}>
-                {event.source} {event.batteryLevel ? `· 电量 ${event.batteryLevel}%` : ''}
+                {formatEventTime(event.timestamp, now)}
+                {event.simulated ? ' · 演练' : ''}
+                {event.batteryLevel !== undefined ? ` · 电量 ${event.batteryLevel}%` : ''}
               </Text>
             </View>
           </View>

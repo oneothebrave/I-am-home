@@ -3,6 +3,8 @@ import { Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { InfoLine, Section } from '../components/Primitives';
 import type { GuardianContact } from '../domain/types';
 import { styles } from '../styles/appStyles';
+import { isPhone, normalizePhone } from '../domain/validation';
+import { createId } from '../utils/id';
 
 export function FamilyScreen({
   contacts,
@@ -17,17 +19,27 @@ export function FamilyScreen({
   const [relation, setRelation] = useState('外甥');
   const [phone, setPhone] = useState('13700000000');
   const canAddMore = contacts.length < 3;
+  const [error, setError] = useState('');
 
   const handleAddContact = () => {
     if (!canAddMore || !name.trim() || !phone.trim()) {
+      setError('请输入姓名和联系电话，最多添加 3 位家人。');
       return;
     }
+    if (
+      !isPhone(phone) ||
+      contacts.some((contact) => normalizePhone(contact.phone) === normalizePhone(phone))
+    ) {
+      setError('联系电话无效或已在名单中。');
+      return;
+    }
+    setError('');
 
     onAddContact({
-      id: `contact-${Date.now()}`,
+      id: createId('contact'),
       name: name.trim(),
       relation: relation.trim() || '家人',
-      phone: phone.trim(),
+      phone: normalizePhone(phone),
       priority: contacts.length + 1,
     });
     setName('');
@@ -38,7 +50,7 @@ export function FamilyScreen({
   return (
     <>
       <Section title="家人名单">
-        {contacts.map(contact => (
+        {contacts.map((contact) => (
           <View style={styles.contactRow} key={contact.id}>
             <View style={styles.flexItem}>
               <Text style={styles.rowTitle}>{contact.name}</Text>
@@ -50,7 +62,8 @@ export function FamilyScreen({
             <TouchableOpacity
               activeOpacity={0.8}
               onPress={() => onRemoveContact(contact.id)}
-              style={styles.removeButton}>
+              style={styles.removeButton}
+            >
               <Text style={styles.removeButtonText}>删</Text>
             </TouchableOpacity>
           </View>
@@ -58,6 +71,11 @@ export function FamilyScreen({
       </Section>
 
       <Section title="新增家人">
+        {!!error && (
+          <Text accessibilityRole="alert" style={styles.errorText}>
+            {error}
+          </Text>
+        )}
         <TextInput
           onChangeText={setName}
           placeholder="姓名"
@@ -84,7 +102,8 @@ export function FamilyScreen({
           activeOpacity={0.8}
           disabled={!canAddMore}
           onPress={handleAddContact}
-          style={[styles.secondaryButton, !canAddMore && styles.secondaryButtonDisabled]}>
+          style={[styles.secondaryButton, !canAddMore && styles.secondaryButtonDisabled]}
+        >
           <Text style={styles.secondaryButtonText}>
             {canAddMore ? '加入通知名单' : '首版最多 3 位家人'}
           </Text>

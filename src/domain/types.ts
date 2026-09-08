@@ -1,4 +1,4 @@
-export type GuardianStatus = 'safe' | 'attention' | 'emergency';
+export type GuardianStatus = 'unknown' | 'safe' | 'attention' | 'emergency';
 
 export type GuardianEventType =
   | 'LEAVE_HOME'
@@ -8,10 +8,15 @@ export type GuardianEventType =
   | 'LONG_STAY'
   | 'LOW_BATTERY'
   | 'LOCATION_LOST'
+  | 'LOCATION_UPDATED'
+  | 'ENTER_WAYPOINT'
+  | 'EXIT_WAYPOINT'
   | 'MOTION_DETECTED'
   | 'NO_MOTION_FOR_LONG_TIME'
   | 'SAFETY_CHECK_REQUESTED'
   | 'FAMILY_NOTIFIED'
+  | 'FAMILY_NOTIFICATION_FAILED'
+  | 'FAMILY_ACKNOWLEDGED'
   | 'ESCALATION_FINISHED'
   | 'USER_CONFIRMED_SAFE'
   | 'SOS_SENT'
@@ -40,6 +45,27 @@ export interface GuardianEvent {
   source: GuardianEventSource;
   location?: GeoPoint;
   batteryLevel?: number;
+  receivedAt?: string;
+  geofenceId?: string;
+  locationLabel?: string;
+  incidentId?: string;
+  contactId?: string;
+  simulated?: boolean;
+}
+
+export type GuardianEventDraft = Omit<GuardianEvent, 'id' | 'timestamp'>;
+
+export interface GuardianIncident {
+  id: string;
+  trigger: GuardianEvent;
+  kind: 'passive' | 'sos';
+  severity: 'attention' | 'emergency';
+  risks: GuardianEvent[];
+  selfPromptAt?: string;
+  notifiedContactIds: string[];
+  lastNotificationAt?: string;
+  acknowledgedBy?: string;
+  completed: boolean;
 }
 
 export interface GuardianGeofence {
@@ -77,6 +103,8 @@ export interface GuardianStatusSnapshot {
   detail: string;
   lastSafeSignal: string;
   locationLabel: string;
-  batteryLevel: number;
+  batteryLevel?: number;
+  riskReason?: string;
+  incident?: GuardianIncident;
   events: GuardianEvent[];
 }

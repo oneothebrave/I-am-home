@@ -5,12 +5,16 @@ import type { NotificationPreview } from '../domain/notificationCopy';
 import { getStatusTone } from '../domain/guardianRules';
 import type { GuardianConfig, GuardianStatusSnapshot } from '../domain/types';
 import { styles } from '../styles/appStyles';
+import { formatEventTime } from '../utils/time';
 
 export function OverviewScreen({
   config,
   isGuardianOn,
   isHydrated,
   onResetLocalState,
+  onRetryStorage,
+  storageStatus,
+  nextStep,
   onConfirmSafe,
   onSOS,
   notificationPreview,
@@ -24,6 +28,9 @@ export function OverviewScreen({
   isHydrated: boolean;
   onConfirmSafe: () => void;
   onResetLocalState: () => void;
+  onRetryStorage: () => void;
+  storageStatus: string;
+  nextStep: string;
   onSOS: () => void;
   notificationPreview: NotificationPreview;
   riskReason: string;
@@ -46,7 +53,10 @@ export function OverviewScreen({
         </Text>
         <View style={styles.metricsRow}>
           <Metric label="位置" value={snapshot.locationLabel} />
-          <Metric label="电量" value={`${snapshot.batteryLevel}%`} />
+          <Metric
+            label="电量"
+            value={snapshot.batteryLevel === undefined ? '未知' : `${snapshot.batteryLevel}%`}
+          />
         </View>
       </View>
 
@@ -62,27 +72,55 @@ export function OverviewScreen({
       <Section title="最近信号">
         <InfoLine label="最后安全信号" value={snapshot.lastSafeSignal} />
         <InfoLine label="关注原因" value={riskReason} />
-        <InfoLine
-          label="下一步"
-          value={`本人 ${config.schedule.escalationDelayMinutes} 分钟内未确认时，通知第 1 位家人。`}
-        />
+        <InfoLine label="下一步" value={nextStep} />
       </Section>
 
       <Section title="今天概况">
         <View style={styles.summaryGrid}>
-          <SummaryPill label="守护时段" value={`${config.schedule.startTime}-${config.schedule.expectedReturnTime}`} />
+          <SummaryPill
+            label="守护时段"
+            value={`${config.schedule.startTime}-${config.schedule.expectedReturnTime}`}
+          />
           <SummaryPill label="地点数量" value={`${config.geofences.length} 个`} />
           <SummaryPill label="家人数量" value={`${config.contacts.length} 位`} />
-          <SummaryPill label="停留阈值" value={`${config.schedule.noMotionThresholdMinutes} 分钟`} />
+          <SummaryPill
+            label="停留阈值"
+            value={`${config.schedule.noMotionThresholdMinutes} 分钟`}
+          />
         </View>
       </Section>
 
       <Section title="本机保存">
         <InfoLine
-          label={isHydrated ? '已载入本机配置' : '正在载入'}
-          value={storageUpdatedAt ? `上次保存：${formatStorageTime(storageUpdatedAt)}` : '暂时没有保存记录。'}
+          label={
+            {
+              loading: '正在载入',
+              idle: '尚未保存',
+              saving: '正在保存',
+              durable: '已保存到本机',
+              memory: '仅保存在内存',
+              error: '存储需要重试',
+            }[storageStatus] ?? '存储状态未知'
+          }
+          value={
+            storageStatus === 'memory'
+              ? '关闭应用后，本次修改可能丢失。'
+              : storageUpdatedAt
+                ? `上次保存：${formatEventTime(storageUpdatedAt)}`
+                : '暂时没有保存记录。'
+          }
         />
-        <TouchableOpacity activeOpacity={0.8} onPress={onResetLocalState} style={styles.exerciseButton}>
+        {(storageStatus === 'error' || storageStatus === 'memory') && (
+          <TouchableOpacity onPress={onRetryStorage} style={styles.exerciseButton}>
+            <Text style={styles.exerciseButtonText}>重试存储</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity
+          disabled={!isHydrated}
+          activeOpacity={0.8}
+          onPress={onResetLocalState}
+          style={styles.exerciseButton}
+        >
           <Text style={styles.exerciseButtonText}>恢复默认演示数据</Text>
         </TouchableOpacity>
       </Section>
@@ -99,11 +137,4 @@ export function OverviewScreen({
       </Section>
     </>
   );
-}
-
-function formatStorageTime(value: string) {
-  const date = new Date(value);
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${hours}:${minutes}`;
 }

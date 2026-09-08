@@ -1,60 +1,53 @@
-import { guardianConfig } from '../domain/mockData';
-import type { GuardianConfig, GuardianEvent } from '../domain/types';
 import { createAsyncStorageGuardianStorage } from './asyncStorageGuardianStorage';
 import {
   createFallbackGuardianStorage,
   createMemoryGuardianStorage,
-  type GuardianStoredState,
   type GuardianStorage,
+  type StorageStatus,
 } from './guardianStorage';
+import {
+  createInitialStoredState,
+  parseStoredState,
+  type GuardianStoredState,
+} from './guardianSchema';
 
 export interface GuardianRepository {
   loadState: () => Promise<GuardianStoredState>;
-  saveConfig: (config: GuardianConfig, localEvents: GuardianEvent[]) => Promise<GuardianStoredState>;
-  saveEvents: (config: GuardianConfig, localEvents: GuardianEvent[]) => Promise<GuardianStoredState>;
-  reset: () => Promise<GuardianStoredState>;
+  saveState: (state: GuardianStoredState) => Promise<GuardianStoredState>;
+  getStatus: () => StorageStatus & { hasStoredState: boolean };
 }
 
-export function createGuardianRepository(storage: GuardianStorage): GuardianRepository {
-  const saveState = async (
-    config: GuardianConfig,
-    localEvents: GuardianEvent[],
-  ): Promise<GuardianStoredState> => {
-    const state: GuardianStoredState = {
-      config,
-      localEvents,
-      updatedAt: new Date().toISOString(),
-    };
-    await storage.save(state);
-    return state;
+export function createGuardianRepository(
+  storage: GuardianStorage,
+  initial = createInitialStoredState,
+): GuardianRepository {
+  let tail: Promise<unknown> = Promise.resolve();
+  let hasStoredState = false;
+  const enqueue = <T>(operation: () => Promise<T>) => {
+    const result = tail.then(operation);
+    tail = result.catch(() => undefined);
+    return result;
   };
-
   return {
-    async loadState() {
-      const storedState = await storage.load();
-
-      return storedState ?? {
-        config: guardianConfig,
-        localEvents: [],
-        updatedAt: new Date().toISOString(),
-      };
+    loadState: () =>
+      enqueue(async () => {
+        const value = await storage.load();
+        hasStoredState = value !== undefined;
+        return value ? parseStoredState(value) : initial();
+      }),
+    saveState(value) {
+      // Capture a validated copy before waiting so caller mutation cannot change a queued write.
+      const state = parseStoredState(value);
+      return enqueue(async () => {
+        await storage.save(state);
+        hasStoredState = true;
+        return state;
+      });
     },
-    async saveConfig(config, localEvents) {
-      return saveState(config, localEvents);
-    },
-    async saveEvents(config, localEvents) {
-      return saveState(config, localEvents);
-    },
-    async reset() {
-      await storage.clear();
-      return this.loadState();
-    },
+    getStatus: () => ({ ...(storage.getStatus?.() ?? { durability: 'durable' }), hasStoredState }),
   };
 }
 
-const defaultGuardianStorage = createFallbackGuardianStorage(
-  createAsyncStorageGuardianStorage(),
-  createMemoryGuardianStorage(),
+export const guardianRepository = createGuardianRepository(
+  createFallbackGuardianStorage(createAsyncStorageGuardianStorage(), createMemoryGuardianStorage()),
 );
-
-export const guardianRepository = createGuardianRepository(defaultGuardianStorage);

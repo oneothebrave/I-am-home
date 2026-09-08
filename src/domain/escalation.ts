@@ -1,113 +1,128 @@
-import type { GuardianConfig, GuardianContact, GuardianEvent, GuardianStatusSnapshot } from './types';
+import type {
+  GuardianConfig,
+  GuardianContact,
+  GuardianEventDraft,
+  GuardianStatusSnapshot,
+} from './types';
 
-export type EscalationPhase = 'idle' | 'self_prompt' | 'family_queue' | 'completed';
-
+export type EscalationPhase =
+  | 'idle'
+  | 'self_prompt'
+  | 'waiting'
+  | 'family_queue'
+  | 'blocked'
+  | 'completed'
+  | 'acknowledged';
 export interface EscalationState {
   phase: EscalationPhase;
   title: string;
   description: string;
   notifiedContacts: GuardianContact[];
+  notifiedCount: number;
   nextContact?: GuardianContact;
+  dueAt?: string;
   nextActionLabel?: string;
-  nextEvent?: Omit<GuardianEvent, 'id' | 'timestamp'>;
+  nextEvent?: GuardianEventDraft;
 }
-
-const RISK_START_TYPES: GuardianEvent['type'][] = [
-  'LONG_STAY',
-  'LOW_BATTERY',
-  'LOCATION_LOST',
-  'NO_MOTION_FOR_LONG_TIME',
-];
-
-const SAFETY_RESOLUTION_TYPES: GuardianEvent['type'][] = [
-  'RETURN_HOME',
-  'USER_CONFIRMED_SAFE',
-  'MOTION_DETECTED',
-];
 
 export function getEscalationState(
   snapshot: GuardianStatusSnapshot,
   config: GuardianConfig,
+  { now = Date.now(), simulate = false }: { now?: number; simulate?: boolean } = {},
 ): EscalationState {
-  const activeEvents = getEventsSinceLastResolution(snapshot.events);
-  const hasActiveRisk = activeEvents.some(event => RISK_START_TYPES.includes(event.type));
-  const familyNotifiedEvents = activeEvents.filter(event => event.type === 'FAMILY_NOTIFIED');
+  const incident = snapshot.incident;
   const contacts = [...config.contacts].sort((a, b) => a.priority - b.priority);
-  const notifiedContacts = contacts.slice(0, familyNotifiedEvents.length);
-  const nextContact = contacts[familyNotifiedEvents.length];
-  const latestEvent = activeEvents.at(-1);
-
-  if (snapshot.status === 'safe' || !hasActiveRisk) {
+  const common = {
+    notifiedContacts: contacts.filter((contact) =>
+      incident?.notifiedContactIds.includes(contact.id),
+    ),
+    notifiedCount: incident?.notifiedContactIds.length ?? 0,
+  };
+  if (!incident)
     return {
+      ...common,
       phase: 'idle',
       title: '没有升级中的提醒',
-      description: '当前状态正常，暂时不需要通知家人。',
-      notifiedContacts: [],
+      description: '当前没有待处理告警。',
     };
-  }
-
-  if (!activeEvents.some(event => event.type === 'SAFETY_CHECK_REQUESTED')) {
+  if (incident.acknowledgedBy)
     return {
+      ...common,
+      phase: 'acknowledged',
+      title: '家人已接手',
+      description: '等待本人确认平安，告警尚未解除。',
+    };
+  if (!contacts.length)
+    return {
+      ...common,
+      phase: 'blocked',
+      title: '没有可通知的家人',
+      description: '请添加至少一位家人。',
+    };
+  const simulationEvent = (event: GuardianEventDraft) =>
+    simulate ? { ...event, incidentId: incident.id, simulated: true } : undefined;
+  if (incident.kind !== 'sos' && incident.severity !== 'emergency' && !incident.selfPromptAt) {
+    return {
+      ...common,
       phase: 'self_prompt',
       title: '先提醒本人',
-      description: `系统会先提醒本人确认安全，${config.schedule.escalationDelayMinutes} 分钟内未响应再通知家人。`,
-      notifiedContacts,
-      nextActionLabel: '演练提醒本人',
-      nextEvent: {
+      description: '等待向本人发送确认提醒。',
+      nextActionLabel: simulate ? '演练提醒本人' : undefined,
+      nextEvent: simulationEvent({
         type: 'SAFETY_CHECK_REQUESTED',
-        title: '已提醒本人',
-        description: '系统已向本人发送确认提醒，等待点击“我没事”。',
+        title: '模拟提醒本人',
+        description: '已演练本人确认提醒。',
         source: 'notification',
-        batteryLevel: snapshot.batteryLevel,
-      },
+      }),
     };
   }
-
-  if (nextContact) {
+  const nextContact = contacts.find((contact) => !incident.notifiedContactIds.includes(contact.id));
+  if (!nextContact) {
     return {
-      phase: 'family_queue',
-      title: `等待通知${nextContact.name}`,
-      description: latestEvent?.type === 'FAMILY_NOTIFIED'
-        ? `上一位家人已收到提醒，若仍无人处理，将继续通知${nextContact.name}。`
-        : `${config.schedule.escalationDelayMinutes} 分钟内本人未确认时，将通知${nextContact.name}。`,
-      notifiedContacts,
-      nextContact,
-      nextActionLabel: `演练通知${nextContact.name}`,
-      nextEvent: {
-        type: 'FAMILY_NOTIFIED',
-        title: `已通知${nextContact.name}`,
-        description: `系统已向${nextContact.name}发送提醒，包含最后位置、电量和异常原因。`,
-        source: 'notification',
-        batteryLevel: snapshot.batteryLevel,
-      },
+      ...common,
+      phase: 'completed',
+      title: simulate ? '名单通知演练完成' : '名单已发送完毕',
+      description: '发送完毕不代表家人已确认，告警仍保留。',
+      nextActionLabel: simulate && !incident.completed ? '演练完成升级' : undefined,
+      nextEvent: incident.completed
+        ? undefined
+        : simulationEvent({
+            type: 'ESCALATION_FINISHED',
+            title: '升级演练完成',
+            description: '保留告警，等待确认。',
+            source: 'notification',
+          }),
     };
   }
-
+  const anchor =
+    incident.lastNotificationAt ??
+    (incident.kind === 'sos' || incident.severity === 'emergency'
+      ? undefined
+      : incident.selfPromptAt);
+  const due = anchor ? Date.parse(anchor) + config.schedule.escalationDelayMinutes * 60_000 : now;
+  if (!simulate && now < due)
+    return {
+      ...common,
+      phase: 'waiting',
+      title: '等待响应',
+      description: '确认期限未到。',
+      nextContact,
+      dueAt: new Date(due).toISOString(),
+    };
   return {
-    phase: 'completed',
-    title: '家人已全部通知',
-    description: '名单中的家人都已收到提醒，需要尽快线下确认。',
-    notifiedContacts,
-    nextActionLabel: '演练完成升级',
-    nextEvent: {
-      type: 'ESCALATION_FINISHED',
-      title: '升级流程完成',
-      description: '所有家人已收到提醒，系统保留当前异常状态。',
+    ...common,
+    phase: 'family_queue',
+    title: `等待通知${nextContact.name}`,
+    description: `下一位接收人为${nextContact.name}。`,
+    nextContact,
+    dueAt: new Date(due).toISOString(),
+    nextActionLabel: simulate ? `演练通知${nextContact.name}` : undefined,
+    nextEvent: simulationEvent({
+      type: 'FAMILY_NOTIFIED',
+      contactId: nextContact.id,
+      title: `模拟通知${nextContact.name}`,
+      description: `已演练向${nextContact.name}发送提醒，未实际发送。`,
       source: 'notification',
-      batteryLevel: snapshot.batteryLevel,
-    },
+    }),
   };
-}
-
-function getEventsSinceLastResolution(events: GuardianEvent[]) {
-  let lastResolutionIndex = -1;
-
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    if (SAFETY_RESOLUTION_TYPES.includes(events[index].type)) {
-      lastResolutionIndex = index;
-      break;
-    }
-  }
-
-  return events.slice(lastResolutionIndex + 1);
 }

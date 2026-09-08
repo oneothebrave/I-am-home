@@ -5,6 +5,7 @@ import { getGeofenceKindLabel, getMockCurrentPoint } from '../domain/geofenceHel
 import type { GuardianGeofence } from '../domain/types';
 import { styles } from '../styles/appStyles';
 import { clamp } from '../utils/number';
+import { createId } from '../utils/id';
 
 export function PlacesScreen({
   geofences,
@@ -24,12 +25,12 @@ export function PlacesScreen({
   const handleAddPlace = () => {
     const name = newPlaceName.trim();
 
-    if (!name) {
+    if (!name || geofences.length >= 20) {
       return;
     }
 
     onAddGeofence({
-      id: `place-${Date.now()}`,
+      id: createId('place'),
       name,
       kind: newPlaceKind,
       center: getMockCurrentPoint(newPlaceKind, geofences.length),
@@ -41,12 +42,13 @@ export function PlacesScreen({
   return (
     <>
       <Section title="守护地点">
-        {geofences.map(geofence => (
+        {geofences.map((geofence) => (
           <View style={styles.placeRow} key={geofence.id}>
             <View style={styles.flexItem}>
               <Text style={styles.rowTitle}>{geofence.name}</Text>
               <Text style={styles.rowMeta}>
-                {geofence.center.latitude.toFixed(4)}, {geofence.center.longitude.toFixed(4)} · 半径 {geofence.radiusMeters} 米
+                {geofence.center.latitude.toFixed(4)}, {geofence.center.longitude.toFixed(4)} · 半径{' '}
+                {geofence.radiusMeters} 米
               </Text>
             </View>
             <View style={styles.rowBadge}>
@@ -56,19 +58,22 @@ export function PlacesScreen({
               <TouchableOpacity
                 activeOpacity={0.8}
                 onPress={() => onAdjustRadius(geofence.id, -50)}
-                style={styles.iconButton}>
+                style={styles.iconButton}
+              >
                 <Text style={styles.iconButtonText}>-</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 activeOpacity={0.8}
                 onPress={() => onAdjustRadius(geofence.id, 50)}
-                style={styles.iconButton}>
+                style={styles.iconButton}
+              >
                 <Text style={styles.iconButtonText}>+</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 activeOpacity={0.8}
                 onPress={() => onRemoveGeofence(geofence.id)}
-                style={styles.removeButton}>
+                style={styles.removeButton}
+              >
                 <Text style={styles.removeButtonText}>删</Text>
               </TouchableOpacity>
             </View>
@@ -85,14 +90,15 @@ export function PlacesScreen({
           value={newPlaceName}
         />
         <View style={styles.segmentRow}>
-          {(['home', 'work', 'waypoint'] as const).map(kind => {
+          {(['home', 'work', 'waypoint'] as const).map((kind) => {
             const isActive = newPlaceKind === kind;
             return (
               <TouchableOpacity
                 activeOpacity={0.8}
                 key={kind}
                 onPress={() => setNewPlaceKind(kind)}
-                style={[styles.segmentButton, isActive && styles.segmentButtonActive]}>
+                style={[styles.segmentButton, isActive && styles.segmentButtonActive]}
+              >
                 <Text style={[styles.segmentText, isActive && styles.segmentTextActive]}>
                   {getGeofenceKindLabel(kind)}
                 </Text>
@@ -105,20 +111,29 @@ export function PlacesScreen({
           <View style={styles.stepperActions}>
             <TouchableOpacity
               activeOpacity={0.8}
-              onPress={() => setNewPlaceRadius(value => clamp(value - 50, 100, 1000))}
-              style={styles.iconButton}>
+              onPress={() => setNewPlaceRadius((value) => clamp(value - 50, 100, 1000))}
+              style={styles.iconButton}
+            >
               <Text style={styles.iconButtonText}>-</Text>
             </TouchableOpacity>
             <TouchableOpacity
               activeOpacity={0.8}
-              onPress={() => setNewPlaceRadius(value => clamp(value + 50, 100, 1000))}
-              style={styles.iconButton}>
+              onPress={() => setNewPlaceRadius((value) => clamp(value + 50, 100, 1000))}
+              style={styles.iconButton}
+            >
               <Text style={styles.iconButtonText}>+</Text>
             </TouchableOpacity>
           </View>
         </View>
-        <TouchableOpacity activeOpacity={0.8} onPress={handleAddPlace} style={styles.secondaryButton}>
-          <Text style={styles.secondaryButtonText}>用当前位置新增地点</Text>
+        <TouchableOpacity
+          disabled={!newPlaceName.trim() || geofences.length >= 20}
+          activeOpacity={0.8}
+          onPress={handleAddPlace}
+          style={[styles.secondaryButton, geofences.length >= 20 && styles.secondaryButtonDisabled]}
+        >
+          <Text style={styles.secondaryButtonText}>
+            {geofences.length >= 20 ? '已达到 20 个地点上限' : '模拟当前位置新增地点'}
+          </Text>
         </TouchableOpacity>
       </Section>
 

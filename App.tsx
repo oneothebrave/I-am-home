@@ -1,30 +1,38 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AppState,
   SafeAreaView,
   ScrollView,
   StatusBar,
+  Switch,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { getStatusTone, summarizeRiskReason } from './src/domain/guardianRules';
-import { guardianConfig, statusSnapshot } from './src/domain/mockData';
+import { getStatusTone } from './src/domain/guardianRules';
 import { composeNotificationPreview } from './src/domain/notificationCopy';
 import { buildGuardianSnapshot } from './src/domain/riskEngine';
 import { getEscalationState } from './src/domain/escalation';
-import type { GuardianConfig, GuardianEvent, GuardianStatusSnapshot } from './src/domain/types';
+import type { GuardianEventDraft } from './src/domain/types';
 import { FamilyScreen } from './src/screens/FamilyScreen';
 import { OverviewScreen } from './src/screens/OverviewScreen';
 import { PlacesScreen } from './src/screens/PlacesScreen';
 import { RulesScreen } from './src/screens/RulesScreen';
 import { TimelineScreen } from './src/screens/TimelineScreen';
 import { guardianRepository } from './src/storage/guardianRepository';
+import { createGuardianStore } from './src/state/guardianStore';
+import { useGuardian } from './src/state/useGuardian';
 import { styles } from './src/styles/appStyles';
 import { clamp } from './src/utils/number';
-import { formatClockTime } from './src/utils/time';
+import {
+  getGuardianNative,
+  subscribeToGuardianEvents,
+  subscribeToGuardianErrors,
+} from './src/native/GuardianNative';
+import { startGuardianEventSync } from './src/native/guardianEventSync';
 
+const store = createGuardianStore(guardianRepository);
 type TabKey = 'overview' | 'places' | 'rules' | 'family' | 'timeline';
-
 const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'overview', label: '概览' },
   { key: 'places', label: '地点' },
@@ -35,144 +43,65 @@ const tabs: Array<{ key: TabKey; label: string }> = [
 
 function App(): React.JSX.Element {
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
-  const [isGuardianOn, setIsGuardianOn] = useState(true);
-  const [config, setConfig] = useState<GuardianConfig>(guardianConfig);
-  const [localEvents, setLocalEvents] = useState<GuardianEvent[]>([]);
-  const [storageUpdatedAt, setStorageUpdatedAt] = useState<string>();
-  const [isHydrated, setIsHydrated] = useState(false);
-  const currentSnapshot = useMemo<GuardianStatusSnapshot>(() => {
-    const events = [...statusSnapshot.events, ...localEvents];
-    return buildGuardianSnapshot(statusSnapshot, events);
-  }, [localEvents]);
-  const tone = getStatusTone(currentSnapshot.status);
-  const riskReason = useMemo(() => summarizeRiskReason(currentSnapshot.events), [currentSnapshot.events]);
-  const notificationPreview = useMemo(
-    () => composeNotificationPreview(currentSnapshot, config),
-    [config, currentSnapshot],
-  );
-  const escalationState = useMemo(
-    () => getEscalationState(currentSnapshot, config),
-    [config, currentSnapshot],
-  );
-
+  const [now, setNow] = useState(Date.now());
+  const [nativeError, setNativeError] = useState('');
+  const nativeSync = useRef<ReturnType<typeof startGuardianEventSync> | undefined>(undefined);
+  const state = useGuardian(store);
+  const { config, localEvents, isGuardianOn, mode } = state.data;
+  const isHydrated = state.loadStatus === 'ready';
   useEffect(() => {
-    let isMounted = true;
-
-    guardianRepository.loadState().then(storedState => {
-      if (!isMounted) {
-        return;
-      }
-
-      setConfig(storedState.config);
-      setLocalEvents(storedState.localEvents);
-      setStorageUpdatedAt(storedState.updatedAt);
-      setIsHydrated(true);
-    });
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const persistState = (nextConfig: GuardianConfig, nextEvents: GuardianEvent[]) => {
-    guardianRepository.saveConfig(nextConfig, nextEvents).then(savedState => {
-      setStorageUpdatedAt(savedState.updatedAt);
-    });
-  };
-
-  const updateConfig = (updater: (current: GuardianConfig) => GuardianConfig) => {
-    setConfig(current => {
-      const nextConfig = updater(current);
-      persistState(nextConfig, localEvents);
-      return nextConfig;
-    });
-  };
-
-  const addLocalEvent = (event: Omit<GuardianEvent, 'id' | 'timestamp'>) => {
-    setLocalEvents(currentEvents => {
-      const nextEvents = [...currentEvents, createLocalEvent(event)];
-      guardianRepository.saveEvents(config, nextEvents).then(savedState => {
-        setStorageUpdatedAt(savedState.updatedAt);
+    if (!isHydrated || mode !== 'device') return;
+    try {
+      const sync = startGuardianEventSync(
+        getGuardianNative(),
+        subscribeToGuardianEvents,
+        store.importEvents,
+        (error) => setNativeError(String(error)),
+      );
+      nativeSync.current = sync;
+      const removeErrors = subscribeToGuardianErrors((event) => setNativeError(event.message));
+      const appState = AppState.addEventListener('change', (value) => {
+        if (value === 'active') void sync.retry();
       });
-      return nextEvents;
-    });
-  };
-
-  const handleResetLocalState = () => {
-    guardianRepository.reset().then(storedState => {
-      setConfig(storedState.config);
-      setLocalEvents(storedState.localEvents);
-      setStorageUpdatedAt(storedState.updatedAt);
-    });
-  };
-
-  const createLocalEvent = (event: Omit<GuardianEvent, 'id' | 'timestamp'>): GuardianEvent => {
-    return {
-      ...event,
-      id: `local-${Date.now()}`,
-      timestamp: formatClockTime(),
-    };
-  };
-
-  const handleConfirmSafe = () => {
-    addLocalEvent({
-      type: 'USER_CONFIRMED_SAFE',
-      title: '本人确认安全',
-      description: '本人点击了我没事，当前风险状态已转为安全。',
-      source: 'user',
-      batteryLevel: currentSnapshot.batteryLevel,
-    });
-  };
-
-  const handleSOS = () => {
-    addLocalEvent({
-      type: 'SOS_SENT',
-      title: '发起求助',
-      description: '本人主动发送求助，家人名单会按顺序收到通知。',
-      source: 'user',
-      batteryLevel: currentSnapshot.batteryLevel,
-    });
-  };
-
-  const handleSimulateReturnHome = () => {
-    addLocalEvent({
-      type: 'RETURN_HOME',
-      title: '回到家',
-      description: '模拟进入家的地理围栏，系统将状态恢复为安全。',
-      source: 'geofence',
-      batteryLevel: currentSnapshot.batteryLevel,
-    });
-  };
-
-  const handleSimulateLocationLost = () => {
-    addLocalEvent({
-      type: 'LOCATION_LOST',
-      title: '位置中断',
-      description: '模拟最后位置在劳作地点附近，随后暂时没有新的定位信号。',
-      source: 'location',
-      batteryLevel: currentSnapshot.batteryLevel,
-    });
-  };
-
-  const handleSimulateRiskEscalated = () => {
-    const firstContact = [...config.contacts].sort((a, b) => a.priority - b.priority)[0];
-    const contactName = firstContact?.name ?? '第一位家人';
-
-    addLocalEvent({
-      type: 'FAMILY_NOTIFIED',
-      title: `已通知${contactName}`,
-      description: `模拟本人未响应安全确认，系统已通知${contactName}。`,
-      source: 'notification',
-      batteryLevel: currentSnapshot.batteryLevel,
-    });
-  };
-
-  const handleAdvanceEscalation = () => {
-    if (!escalationState.nextEvent) {
-      return;
+      return () => {
+        sync.stop();
+        removeErrors();
+        appState.remove();
+        nativeSync.current = undefined;
+      };
+    } catch (error) {
+      setNativeError(String(error));
     }
-
-    addLocalEvent(escalationState.nextEvent);
+  }, [isHydrated, mode]);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+  const snapshot = useMemo(
+    () =>
+      buildGuardianSnapshot(localEvents, {
+        now,
+        maxSafeAgeMinutes: config.schedule.noMotionThresholdMinutes,
+      }),
+    [localEvents, now, config.schedule.noMotionThresholdMinutes],
+  );
+  const escalation = useMemo(
+    () => getEscalationState(snapshot, config, { now, simulate: mode === 'demo' }),
+    [snapshot, config, now, mode],
+  );
+  const preview = useMemo(() => composeNotificationPreview(snapshot, config), [snapshot, config]);
+  const addEvent = (draft: GuardianEventDraft) => {
+    store.addEvent({ ...draft, simulated: isHydrated ? mode === 'demo' : undefined });
+    setNow(Date.now());
+  };
+  const advance = () => {
+    // Recompute from the store so rapid taps cannot submit a stale next recipient.
+    const current = store.getSnapshot().data;
+    if (!current.isGuardianOn || current.mode !== 'demo') return;
+    const next = getEscalationState(buildGuardianSnapshot(current.localEvents), current.config, {
+      simulate: true,
+    }).nextEvent;
+    if (next) addEvent(next);
   };
 
   return (
@@ -180,127 +109,171 @@ function App(): React.JSX.Element {
       <StatusBar barStyle="dark-content" backgroundColor="#F7F4ED" />
       <View style={styles.shell}>
         <View style={styles.header}>
-          <View>
+          <View style={styles.flexItem}>
             <Text style={styles.appName}>到家说一声</Text>
             <Text style={styles.subtleText}>
-              {isGuardianOn ? '今天正在安静守着' : '守护已暂停'}
+              {mode === 'demo' ? '演示模式 · 不发送真实通知' : '设备模式 · 通知服务尚未接入'}
             </Text>
           </View>
-          <TouchableOpacity
-            activeOpacity={0.8}
-            onPress={() => setIsGuardianOn(value => !value)}
-            style={[styles.guardianSwitch, isGuardianOn ? styles.switchOn : styles.switchOff]}>
-            <Text style={[styles.switchText, isGuardianOn ? styles.switchTextOn : styles.switchTextOff]}>
-              {isGuardianOn ? '开启' : '暂停'}
-            </Text>
-          </TouchableOpacity>
+          <Switch
+            accessibilityLabel="守护开关"
+            disabled={!isHydrated || mode !== 'demo'}
+            value={isGuardianOn}
+            onValueChange={store.setEnabled}
+          />
         </View>
-
         <View style={styles.tabBar}>
-          {tabs.map(tab => {
-            const isActive = activeTab === tab.key;
-            return (
-              <TouchableOpacity
-                activeOpacity={0.8}
-                key={tab.key}
-                onPress={() => setActiveTab(tab.key)}
-                style={[styles.tabButton, isActive && styles.tabButtonActive]}>
-                <Text style={[styles.tabText, isActive && styles.tabTextActive]}>{tab.label}</Text>
-              </TouchableOpacity>
-            );
-          })}
+          {tabs.map((tab) => (
+            <TouchableOpacity
+              key={tab.key}
+              disabled={!isHydrated && tab.key !== 'overview'}
+              onPress={() => setActiveTab(tab.key)}
+              style={[styles.tabButton, activeTab === tab.key && styles.tabButtonActive]}
+            >
+              <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </View>
-
-        <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={styles.container}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {state.error && (
+            <Text accessibilityRole="alert" style={styles.errorText}>
+              {state.error}
+            </Text>
+          )}
+          {!!nativeError && (
+            <Text accessibilityRole="alert" style={styles.errorText}>
+              {nativeError}
+            </Text>
+          )}
           {activeTab === 'overview' && (
             <OverviewScreen
               config={config}
               isGuardianOn={isGuardianOn}
               isHydrated={isHydrated}
-              riskReason={riskReason}
-              storageUpdatedAt={storageUpdatedAt}
-              snapshot={currentSnapshot}
-              tone={tone}
-              onResetLocalState={handleResetLocalState}
-              onConfirmSafe={handleConfirmSafe}
-              onSOS={handleSOS}
-              notificationPreview={notificationPreview}
+              riskReason={snapshot.riskReason ?? ''}
+              storageUpdatedAt={state.savedAt}
+              storageStatus={state.loadStatus === 'ready' ? state.saveStatus : state.loadStatus}
+              nextStep={
+                isGuardianOn ? escalation.description : '守护已暂停，未解除的告警仍然保留。'
+              }
+              snapshot={snapshot}
+              tone={getStatusTone(snapshot.status)}
+              notificationPreview={preview}
+              onRetryStorage={() => {
+                void store.retry().then(() => nativeSync.current?.retry());
+              }}
+              onResetLocalState={() => {
+                store.reset();
+              }}
+              onConfirmSafe={() =>
+                addEvent({
+                  type: 'USER_CONFIRMED_SAFE',
+                  title: '本人确认平安',
+                  description: '本人已明确确认平安。',
+                  source: 'user',
+                })
+              }
+              onSOS={() =>
+                addEvent({
+                  type: 'SOS_SENT',
+                  title: '主动求助',
+                  description:
+                    mode === 'demo'
+                      ? '已记录求助演练，未向家人实际发送通知。'
+                      : '已记录求助，请直接联系家人。',
+                  source: 'user',
+                })
+              }
             />
           )}
-          {activeTab === 'places' && (
+          {isHydrated && activeTab === 'places' && (
             <PlacesScreen
               geofences={config.geofences}
-              onAddGeofence={geofence =>
-                updateConfig(current => ({
+              onAddGeofence={(geofence) => {
+                store.updateConfig((current) => ({
                   ...current,
                   geofences: [...current.geofences, geofence],
-                }))
-              }
-              onAdjustRadius={(id, delta) =>
-                updateConfig(current => ({
+                }));
+              }}
+              onAdjustRadius={(id, delta) => {
+                store.updateConfig((current) => ({
                   ...current,
-                  geofences: current.geofences.map(geofence =>
-                    geofence.id === id
-                      ? {
-                          ...geofence,
-                          radiusMeters: clamp(geofence.radiusMeters + delta, 100, 1000),
-                        }
-                      : geofence,
+                  geofences: current.geofences.map((fence) =>
+                    fence.id === id
+                      ? { ...fence, radiusMeters: clamp(fence.radiusMeters + delta, 100, 1000) }
+                      : fence,
                   ),
-                }))
-              }
-              onRemoveGeofence={id =>
-                updateConfig(current => ({
+                }));
+              }}
+              onRemoveGeofence={(id) => {
+                store.updateConfig((current) => ({
                   ...current,
-                  geofences: current.geofences.filter(geofence => geofence.id !== id),
-                }))
-              }
+                  geofences: current.geofences.filter((fence) => fence.id !== id),
+                }));
+              }}
             />
           )}
-          {activeTab === 'rules' && (
+          {isHydrated && activeTab === 'rules' && (
             <RulesScreen
               schedule={config.schedule}
-              onChangeSchedule={schedule =>
-                updateConfig(current => ({
-                  ...current,
-                  schedule,
-                }))
-              }
+              onChangeSchedule={(schedule) => {
+                store.updateConfig((current) => ({ ...current, schedule }));
+              }}
             />
           )}
-          {activeTab === 'family' && (
+          {isHydrated && activeTab === 'family' && (
             <FamilyScreen
               contacts={config.contacts}
-              onAddContact={contact =>
-                updateConfig(current => ({
+              onAddContact={(contact) => {
+                store.updateConfig((current) => ({
                   ...current,
                   contacts: [
                     ...current.contacts,
-                    {
-                      ...contact,
-                      priority: current.contacts.length + 1,
-                    },
+                    { ...contact, priority: current.contacts.length + 1 },
                   ],
-                }))
-              }
-              onRemoveContact={id =>
-                updateConfig(current => ({
+                }));
+              }}
+              onRemoveContact={(id) => {
+                store.updateConfig((current) => ({
                   ...current,
                   contacts: current.contacts
-                    .filter(contact => contact.id !== id)
+                    .filter((contact) => contact.id !== id)
+                    .sort((a, b) => a.priority - b.priority)
                     .map((contact, index) => ({ ...contact, priority: index + 1 })),
-                }))
-              }
+                }));
+              }}
             />
           )}
-          {activeTab === 'timeline' && (
+          {isHydrated && activeTab === 'timeline' && (
             <TimelineScreen
-              escalationState={escalationState}
-              events={currentSnapshot.events}
-              onAdvanceEscalation={handleAdvanceEscalation}
-              onSimulateLocationLost={handleSimulateLocationLost}
-              onSimulateReturnHome={handleSimulateReturnHome}
-              onSimulateRiskEscalated={handleSimulateRiskEscalated}
+              escalationState={escalation}
+              events={snapshot.events}
+              now={now}
+              canSimulate={mode === 'demo' && isGuardianOn}
+              onAdvanceEscalation={advance}
+              onSimulateLocationLost={() =>
+                addEvent({
+                  type: 'LOCATION_LOST',
+                  title: '位置中断演练',
+                  description: '暂时没有新的定位信号。',
+                  source: 'location',
+                })
+              }
+              onSimulateReturnHome={() =>
+                addEvent({
+                  type: 'RETURN_HOME',
+                  title: '回家演练',
+                  description: '模拟进入家的地理围栏。',
+                  locationLabel: '家附近',
+                  source: 'geofence',
+                })
+              }
             />
           )}
         </ScrollView>
@@ -308,5 +281,4 @@ function App(): React.JSX.Element {
     </SafeAreaView>
   );
 }
-
 export default App;

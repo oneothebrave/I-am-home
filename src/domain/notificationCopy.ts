@@ -1,3 +1,4 @@
+import { formatEventTime } from '../utils/time';
 import type { GuardianConfig, GuardianStatusSnapshot } from './types';
 
 export interface NotificationPreview {
@@ -12,36 +13,22 @@ export function composeNotificationPreview(
   snapshot: GuardianStatusSnapshot,
   config: GuardianConfig,
 ): NotificationPreview {
-  const firstContact = [...config.contacts].sort((a, b) => a.priority - b.priority)[0];
-  const firstContactName = firstContact?.name ?? '第一位家人';
-  const latestEvent = snapshot.events.at(-1);
-  const latestTime = latestEvent?.timestamp ?? '刚刚';
-
-  if (snapshot.status === 'safe') {
-    return {
-      selfTitle: '今天看起来正常',
-      selfBody: `${snapshot.lastSafeSignal}，系统会继续安静守着。`,
-      familyTitle: '亲人状态正常',
-      familyBody: `${snapshot.locationLabel}，${snapshot.lastSafeSignal}。`,
-      firstContactName,
-    };
-  }
-
-  if (snapshot.status === 'emergency') {
-    return {
-      selfTitle: '正在通知家人',
-      selfBody: '系统会按家人名单顺序发送提醒，也可以直接拨打电话联系。',
-      familyTitle: '需要尽快确认亲人状态',
-      familyBody: `${latestTime}，${snapshot.detail} 当前电量 ${snapshot.batteryLevel}%，位置：${snapshot.locationLabel}。`,
-      firstContactName,
-    };
-  }
-
+  const incident = snapshot.incident;
+  const contact = [...config.contacts]
+    .sort((a, b) => a.priority - b.priority)
+    .find((item) => !incident?.notifiedContactIds.includes(item.id));
+  const firstContactName = contact?.name ?? '家人';
+  const battery =
+    snapshot.batteryLevel === undefined ? '电量未知' : `电量 ${snapshot.batteryLevel}%`;
   return {
-    selfTitle: '请确认是否安全',
-    selfBody: `${snapshot.detail} 请点击“我没事”，避免家人担心。`,
-    familyTitle: '亲人状态需要留意',
-    familyBody: `${latestTime}，${snapshot.detail} 当前电量 ${snapshot.batteryLevel}%，最后位置：${snapshot.locationLabel}。`,
     firstContactName,
+    selfTitle: incident ? '请确认是否安全' : snapshot.headline,
+    selfBody: incident ? snapshot.detail : snapshot.lastSafeSignal,
+    familyTitle: incident
+      ? '需要确认亲人状态'
+      : snapshot.status === 'unknown'
+        ? '亲人状态待确认'
+        : '最近有平安信号',
+    familyBody: `${incident ? formatEventTime(incident.trigger.timestamp) + '，' : ''}${snapshot.detail} 位置：${snapshot.locationLabel}，${battery}。`,
   };
 }

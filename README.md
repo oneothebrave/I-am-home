@@ -18,12 +18,20 @@ This repository currently contains the first development foundation:
 - iOS Swift core skeleton in `ios/GuardianCore`.
 - Product and implementation notes in `docs`.
 
+The refactored prototype includes a shared incident model, versioned local state,
+serialized persistence, a native event acknowledgement protocol, and regression tests.
+The default UI is explicitly a demo and does not send real notifications.
+See [refactoring notes](docs/refactoring.md) for verified behavior and remaining iOS work.
+
 ## Scripts
 
 ```bash
-npm install
+npm ci
 npm run typecheck
+npm test
+npm run bundle:ios
 npm run ios
 ```
 
-The iOS app requires a macOS/Xcode environment to build and run on simulator or device.
+The JavaScript bundle can be checked on Windows with Node 24. The iOS app still requires
+a full Xcode project, native target integration, and macOS/Xcode to build and run.

@@ -1,6 +1,7 @@
 import { StyleSheet } from 'react-native';
 
 export const styles = StyleSheet.create({
+  errorText: { color: '#8A2E22', fontSize: 14, lineHeight: 20, marginBottom: 12 },
   safeArea: {
     flex: 1,
     backgroundColor: '#F7F4ED',
