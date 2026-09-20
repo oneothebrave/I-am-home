@@ -6,6 +6,7 @@ export type GuardianAction =
   | { type: 'config'; config: GuardianConfig }
   | { type: 'events'; events: GuardianEvent[] }
   | { type: 'enabled'; enabled: boolean }
+  | { type: 'paused'; paused: boolean }
   | { type: 'reset'; data: GuardianStoredState };
 
 export function guardianReducer(
@@ -19,6 +20,10 @@ export function guardianReducer(
       return data.isGuardianOn === action.enabled
         ? data
         : { ...data, isGuardianOn: action.enabled };
+    case 'paused':
+      return data.isGuardianPaused === action.paused
+        ? data
+        : { ...data, isGuardianPaused: action.paused };
     case 'reset':
       return action.data;
     case 'events': {

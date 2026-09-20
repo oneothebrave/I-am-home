@@ -10,14 +10,16 @@ export function FamilyScreen({
   contacts,
   onAddContact,
   onRemoveContact,
+  showNotificationPolicy = true,
 }: {
   contacts: GuardianContact[];
   onAddContact: (contact: GuardianContact) => void;
   onRemoveContact: (id: string) => void;
+  showNotificationPolicy?: boolean;
 }) {
-  const [name, setName] = useState('小勇');
-  const [relation, setRelation] = useState('外甥');
-  const [phone, setPhone] = useState('13700000000');
+  const [name, setName] = useState('');
+  const [relation, setRelation] = useState('');
+  const [phone, setPhone] = useState('');
   const canAddMore = contacts.length < 3;
   const [error, setError] = useState('');
 
@@ -105,16 +107,18 @@ export function FamilyScreen({
           style={[styles.secondaryButton, !canAddMore && styles.secondaryButtonDisabled]}
         >
           <Text style={styles.secondaryButtonText}>
-            {canAddMore ? '加入通知名单' : '首版最多 3 位家人'}
+            {canAddMore ? '保存家人信息' : '最多保存 3 位家人'}
           </Text>
         </TouchableOpacity>
       </Section>
 
-      <Section title="通知策略">
-        <InfoLine label="先提醒本人" value="异常出现后，先让本人确认我没事。" />
-        <InfoLine label="再通知家人" value="未确认时按家人优先级逐个升级。" />
-        <InfoLine label="通知内容" value="包含最后位置、最后信号、电量和异常原因。" />
-      </Section>
+      {showNotificationPolicy && (
+        <Section title="通知策略">
+          <InfoLine label="先提醒本人" value="异常出现后，先让本人确认我没事。" />
+          <InfoLine label="再通知家人" value="未确认时按家人优先级逐个升级。" />
+          <InfoLine label="通知内容" value="包含最后位置、最后信号、电量和异常原因。" />
+        </Section>
+      )}
     </>
   );
 }

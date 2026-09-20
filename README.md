@@ -1,10 +1,10 @@
-# 到家说一声
+# 到家了么
 
-iOS-first family safety guardian app prototype.
+iOS-first family safety guardian app prototype for older adults.
 
 The product direction is:
 
-- React Native for screens, settings, status display, maps, contacts, and history.
+- React Native for a simple three-tab experience: Status, Places, and My.
 - Swift native modules for background location, geofencing, motion, battery, local notifications, and event wakeups.
 - A shared rule model that turns native events into clear safety states: safe, attention, and emergency.
 
@@ -21,13 +21,14 @@ This repository currently contains the first development foundation:
 
 The refactored prototype includes a shared incident model, versioned local state,
 serialized persistence, a native event acknowledgement protocol, and regression tests.
-The device-mode Places screen can request a fresh, precise iPhone location, validate its
-age and accuracy, save it as a place, and serialize the latest geofence configuration to
-the Swift runtime. Demo coordinates are cleared before device mode is activated. The
-device-mode guardian switch now requires a real place, Always Location, precise location,
-and a successful fence sync before it starts native monitoring; native status is reconciled
-on launch and foreground transitions before the JavaScript switch is updated.
-The default UI is explicitly a demo and does not send real notifications.
+The Places screen uses the iPhone's current precise location, so this version has no map
+dependency. A user chooses a familiar place name and a 150, 300, or 500 metre radius,
+then the latest geofence configuration is synchronized to the Swift runtime. Once a real
+place, Always Location, precise location, and geofence synchronization are ready, native
+guardian service starts automatically. An explicit pause remains available under My.
+
+The app currently records guardian events locally. Automated calls, SMS, push delivery to
+family members, motion-risk evaluation, and delivery receipts are not implemented yet.
 See [refactoring notes](docs/refactoring.md) for verified behavior and remaining iOS work.
 
 ## Scripts

@@ -1,140 +1,103 @@
 import React from 'react';
-import { Text, TouchableOpacity, View } from 'react-native';
-import { InfoLine, Metric, Section, SummaryPill } from '../components/Primitives';
-import type { NotificationPreview } from '../domain/notificationCopy';
-import { getStatusTone } from '../domain/guardianRules';
-import type { GuardianConfig, GuardianStatusSnapshot } from '../domain/types';
+import { Image, Text, TouchableOpacity, View } from 'react-native';
+import type { GuardianStatusSnapshot } from '../domain/types';
+import type { getStatusTone } from '../domain/guardianRules';
 import { styles } from '../styles/appStyles';
-import { formatEventTime } from '../utils/time';
 
 export function OverviewScreen({
-  config,
+  guardianReady,
+  guardianStatus,
   isGuardianOn,
-  isHydrated,
-  onResetLocalState,
-  onRetryStorage,
-  storageStatus,
-  nextStep,
+  mode,
   onConfirmSafe,
-  onSOS,
-  notificationPreview,
-  riskReason,
   snapshot,
-  storageUpdatedAt,
   tone,
 }: {
-  config: GuardianConfig;
+  guardianReady: boolean;
+  guardianStatus: string;
   isGuardianOn: boolean;
-  isHydrated: boolean;
+  mode: 'demo' | 'device';
   onConfirmSafe: () => void;
-  onResetLocalState: () => void;
-  onRetryStorage: () => void;
-  storageStatus: string;
-  nextStep: string;
-  onSOS: () => void;
-  notificationPreview: NotificationPreview;
-  riskReason: string;
   snapshot: GuardianStatusSnapshot;
-  storageUpdatedAt?: string;
   tone: ReturnType<typeof getStatusTone>;
 }) {
+  const needsConfirmation = snapshot.status === 'attention' || snapshot.status === 'emergency';
+  const headline = !isGuardianOn
+    ? '守护已暂停'
+    : !guardianReady
+      ? '守护需要处理'
+      : snapshot.status === 'unknown'
+        ? '守护中'
+        : snapshot.headline;
+  const detail = !isGuardianOn
+    ? '前往“我的”即可恢复自动守护。'
+    : !guardianReady
+      ? guardianStatus
+      : snapshot.status === 'unknown'
+        ? '正在后台安静守护，暂时还没有新的可信信号。'
+        : snapshot.detail;
+  const shieldMark = !isGuardianOn || !guardianReady ? '!' : needsConfirmation ? '!' : '✓';
+
   return (
     <>
-      <View style={[styles.statusPanel, { backgroundColor: tone.background }]}>
-        <View style={styles.statusRow}>
-          <View style={styles.flexItem}>
-            <Text style={[styles.statusLabel, { color: tone.foreground }]}>{tone.label}</Text>
-            <Text style={styles.statusHeadline}>{snapshot.headline}</Text>
+      <Text style={styles.screenTitle}>今天</Text>
+      <View style={[styles.heroStatusCard, { backgroundColor: tone.background }]}>
+        <View
+          accessible
+          accessibilityLabel={`${headline}，${detail}`}
+          style={styles.guardianVisual}
+        >
+          <View
+            style={[styles.guardianHaloOuter, { backgroundColor: `${tone.accent}12` }]}
+          >
+            <View
+              style={[styles.guardianHaloMiddle, { backgroundColor: `${tone.accent}22` }]}
+            >
+              <View style={[styles.guardianHaloCore, { backgroundColor: tone.accent }]}>
+                <Image
+                  resizeMode="contain"
+                  source={require('../assets/guardian-shield.png')}
+                  style={styles.guardianShieldImage}
+                />
+                <Text style={[styles.guardianShieldMark, { color: tone.accent }]}>
+                  {shieldMark}
+                </Text>
+              </View>
+            </View>
           </View>
-          <View style={[styles.statusDot, { backgroundColor: tone.accent }]} />
         </View>
-        <Text style={styles.statusDetail}>
-          {isGuardianOn ? snapshot.detail : '暂停后不会主动记录位置事件，也不会自动升级通知家人。'}
+        <Text
+          style={[styles.statusLabel, styles.centeredStatusLabel, { color: tone.foreground }]}
+        >
+          自动守护
         </Text>
-        <View style={styles.metricsRow}>
-          <Metric label="位置" value={snapshot.locationLabel} />
-          <Metric
-            label="电量"
-            value={snapshot.batteryLevel === undefined ? '未知' : `${snapshot.batteryLevel}%`}
-          />
+        <Text style={[styles.heroStatusHeadline, styles.centeredStatusText]}>{headline}</Text>
+        <Text style={[styles.heroStatusDetail, styles.centeredStatusText]}>{detail}</Text>
+        <View style={styles.statusFacts}>
+          <View style={styles.statusFact}>
+            <Text style={styles.statusFactLabel}>当前位置</Text>
+            <Text style={styles.statusFactValue}>{snapshot.locationLabel}</Text>
+          </View>
+          <View style={styles.statusFactDivider} />
+          <View style={styles.statusFact}>
+            <Text style={styles.statusFactLabel}>最后信号</Text>
+            <Text style={styles.statusFactValue}>{snapshot.lastSafeSignal}</Text>
+          </View>
         </View>
       </View>
 
-      <View style={styles.actionRow}>
-        <TouchableOpacity style={styles.primaryButton} activeOpacity={0.8} onPress={onConfirmSafe}>
+      {needsConfirmation && (
+        <TouchableOpacity activeOpacity={0.8} onPress={onConfirmSafe} style={styles.primaryButton}>
           <Text style={styles.primaryButtonText}>我没事</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.dangerButton} activeOpacity={0.8} onPress={onSOS}>
-          <Text style={styles.dangerButtonText}>求助</Text>
-        </TouchableOpacity>
-      </View>
+      )}
 
-      <Section title="最近信号">
-        <InfoLine label="最后安全信号" value={snapshot.lastSafeSignal} />
-        <InfoLine label="关注原因" value={riskReason} />
-        <InfoLine label="下一步" value={nextStep} />
-      </Section>
-
-      <Section title="今天概况">
-        <View style={styles.summaryGrid}>
-          <SummaryPill
-            label="守护时段"
-            value={`${config.schedule.startTime}-${config.schedule.expectedReturnTime}`}
-          />
-          <SummaryPill label="地点数量" value={`${config.geofences.length} 个`} />
-          <SummaryPill label="家人数量" value={`${config.contacts.length} 位`} />
-          <SummaryPill
-            label="停留阈值"
-            value={`${config.schedule.noMotionThresholdMinutes} 分钟`}
-          />
+      {mode === 'device' && (
+        <View style={styles.noticeCard}>
+          <Text style={styles.noticeTitle}>家人通知尚未启用</Text>
+          <Text style={styles.noticeText}>当前异常与守护记录只保存在本机。</Text>
         </View>
-      </Section>
-
-      <Section title="本机保存">
-        <InfoLine
-          label={
-            {
-              loading: '正在载入',
-              idle: '尚未保存',
-              saving: '正在保存',
-              durable: '已保存到本机',
-              memory: '仅保存在内存',
-              error: '存储需要重试',
-            }[storageStatus] ?? '存储状态未知'
-          }
-          value={
-            storageStatus === 'memory'
-              ? '关闭应用后，本次修改可能丢失。'
-              : storageUpdatedAt
-                ? `上次保存：${formatEventTime(storageUpdatedAt)}`
-                : '暂时没有保存记录。'
-          }
-        />
-        {(storageStatus === 'error' || storageStatus === 'memory') && (
-          <TouchableOpacity onPress={onRetryStorage} style={styles.exerciseButton}>
-            <Text style={styles.exerciseButtonText}>重试存储</Text>
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity
-          disabled={!isHydrated}
-          activeOpacity={0.8}
-          onPress={onResetLocalState}
-          style={styles.exerciseButton}
-        >
-          <Text style={styles.exerciseButtonText}>恢复默认演示数据</Text>
-        </TouchableOpacity>
-      </Section>
-
-      <Section title="提醒预览">
-        <InfoLine
-          label={`提醒本人：${notificationPreview.selfTitle}`}
-          value={notificationPreview.selfBody}
-        />
-        <InfoLine
-          label={`提醒${notificationPreview.firstContactName}：${notificationPreview.familyTitle}`}
-          value={notificationPreview.familyBody}
-        />
-      </Section>
+      )}
     </>
   );
 }

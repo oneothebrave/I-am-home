@@ -50,4 +50,5 @@ export function createGuardianRepository(
 
 export const guardianRepository = createGuardianRepository(
   createFallbackGuardianStorage(createAsyncStorageGuardianStorage(), createMemoryGuardianStorage()),
+  () => createInitialStoredState(Date.now(), 'device'),
 );

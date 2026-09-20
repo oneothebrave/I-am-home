@@ -146,6 +146,9 @@ export function createGuardianStore(repository: GuardianRepository, clock = Date
     setEnabled(enabled: boolean) {
       dispatch({ type: 'enabled', enabled });
     },
+    setPaused(paused: boolean) {
+      dispatch({ type: 'paused', paused });
+    },
     activateDeviceMode() {
       if (view.loadStatus !== 'ready' || view.data.mode === 'device') return false;
       return dispatch({ type: 'reset', data: createInitialStoredState(clock(), 'device') });

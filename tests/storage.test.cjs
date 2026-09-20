@@ -47,7 +47,7 @@ test('memory storage clones reads and writes; clear means absent', async () => {
   await driver.clear();
   assert.equal(await driver.load(), undefined);
 });
-test('AsyncStorage JSON adapter round-trips v2', async () => {
+test('AsyncStorage JSON adapter round-trips v3', async () => {
   const values = new Map();
   const adapterLoad = createLoader({
     '@react-native-async-storage/async-storage': {
@@ -123,7 +123,12 @@ test('dirty fallback is not overwritten by an old primary copy after recovery', 
   assert.equal((await primary.load()).isGuardianOn, false);
 });
 test('R07: bad JSON shape and future schema versions are rejected', () => {
-  for (const value of [{}, { ...initial(), schemaVersion: 3 }, { ...initial(), localEvents: [{}] }])
+  for (const value of [
+    {},
+    { ...initial(), schemaVersion: 4 },
+    { ...initial(), isGuardianPaused: 'yes' },
+    { ...initial(), localEvents: [{}] },
+  ])
     assert.throws(() => parseStoredState(value));
 });
 test('R09: legacy HH:mm events migrate across midnight without assuming recipients', () => {
@@ -154,7 +159,18 @@ test('R09: legacy HH:mm events migrate across midnight without assuming recipien
   assert.equal(new Date(migrated.localEvents[0].timestamp).getDate(), 7);
   assert.equal(new Date(migrated.localEvents[1].timestamp).getDate(), 8);
   assert.equal(migrated.localEvents[1].contactId, undefined);
-  assert.equal(migrated.schemaVersion, 2);
+  assert.equal(migrated.schemaVersion, 3);
+  assert.equal(migrated.isGuardianPaused, false);
+});
+test('v2 device state preserves an intentional pause during migration', () => {
+  const raw = initial();
+  raw.schemaVersion = 2;
+  delete raw.isGuardianPaused;
+  raw.mode = 'device';
+  raw.isGuardianOn = false;
+  const migrated = parseStoredState(raw);
+  assert.equal(migrated.schemaVersion, 3);
+  assert.equal(migrated.isGuardianPaused, true);
 });
 test('R12: invalid time, phone, duplicate contacts and excessive fences are rejected', () => {
   const variants = [
@@ -334,6 +350,15 @@ test('save failure retains edits and retries only the latest state', async () =>
   await store.retry();
   assert.equal(store.getSnapshot().saveStatus, 'durable');
   assert.equal((await disk.load()).isGuardianOn, false);
+});
+test('an explicit guardian pause is durable and independent from native enabled state', async () => {
+  const disk = durable();
+  const store = createGuardianStore(repository(disk), () => now);
+  await store.initialize();
+  store.setPaused(true);
+  await store.flush();
+  assert.equal(store.getSnapshot().data.isGuardianPaused, true);
+  assert.equal((await disk.load()).isGuardianPaused, true);
 });
 test('same-millisecond events get unique identities', async () => {
   const store = createGuardianStore(repository(durable(), initial), () => now);

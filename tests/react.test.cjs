@@ -23,7 +23,20 @@ const { createInitialStoredState } = load('src/storage/guardianSchema.ts');
 const { useGuardian } = load('src/state/useGuardian.ts');
 const { RulesScreen } = load('src/screens/RulesScreen.tsx');
 const { PlacesScreen } = load('src/screens/PlacesScreen.tsx');
+const { getFootprintEvents } = load('src/screens/FootprintsScreen.tsx');
 const now = Date.parse('2026-09-08T10:00:00Z');
+
+test('footprints include only location transitions and show the newest first', () => {
+  const events = [
+    { id: 'home', type: 'RETURN_HOME', timestamp: '2026-09-08T09:00:00Z' },
+    { id: 'battery', type: 'LOW_BATTERY', timestamp: '2026-09-08T11:00:00Z' },
+    { id: 'waypoint', type: 'ENTER_WAYPOINT', timestamp: '2026-09-08T10:00:00Z' },
+  ];
+  assert.deepEqual(
+    getFootprintEvents(events).map((event) => event.id),
+    ['waypoint', 'home'],
+  );
+});
 
 test('React StrictMode loads once and renders an SOS queued before hydration', async () => {
   let resolveLoad,
@@ -101,26 +114,20 @@ test('rule time drafts accept editing but persist only valid completed times', a
   });
 });
 
-test('device place form captures a real sample before reporting native sync success', async () => {
-  const captured = [];
+test('device place flow gets the current location before saving the chosen radius', async () => {
+  const saved = [];
   let renderer;
   await act(async () => {
     renderer = create(
       React.createElement(PlacesScreen, {
         geofences: [],
         geofenceSyncStatus: 'synced',
-        guardianStatus: '已暂停',
+        isGuardianOn: false,
+        isGuardianPaused: false,
         mode: 'device',
-        permissions: {
-          location: 'whenInUse',
-          locationAccuracy: 'full',
-          motion: 'notDetermined',
-          notifications: 'notDetermined',
-        },
         onActivateDeviceMode() {},
         onAdjustRadius() {},
-        async onCaptureCurrentLocation(place) {
-          captured.push(place);
+        async onGetCurrentLocation() {
           return {
             latitude: 30,
             longitude: 120,
@@ -128,30 +135,51 @@ test('device place form captures a real sample before reporting native sync succ
             timestamp: '2026-09-20T10:00:00.000Z',
           };
         },
-        async onRefreshPermissions() {},
+        onOpenSettings() {},
         onRemoveGeofence() {},
-        async onRequestPermissions() {},
         async onRetryGeofenceSync() {},
+        async onSaveCurrentLocation(place, sample) {
+          saved.push({ place, sample });
+        },
       }),
     );
   });
-  const button = renderer.root
+  const addButton = renderer.root
     .findAllByType('TouchableOpacity')
     .find((node) =>
       node
         .findAllByType('Text')
-        .some((text) => text.children.join('') === '获取当前位置并同步围栏'),
+        .some((text) => text.children.join('') === '添加守护地点'),
     );
-  assert.equal(button.props.disabled, false);
+  assert.equal(addButton.props.disabled, false);
   await act(async () => {
-    button.props.onPress();
+    addButton.props.onPress();
     await new Promise((resolve) => setImmediate(resolve));
   });
-  assert.deepEqual(captured, [{ name: '菜地', kind: 'work', radiusMeters: 320 }]);
   assert.ok(
     renderer.root
       .findAllByType('Text')
       .some((text) => text.children.join('').includes('精度约 18 米')),
   );
+  const saveButton = renderer.root
+    .findAllByType('TouchableOpacity')
+    .find((node) =>
+      node.findAllByType('Text').some((text) => text.children.join('') === '保存并开始守护'),
+    );
+  await act(async () => {
+    saveButton.props.onPress();
+    await new Promise((resolve) => setImmediate(resolve));
+  });
+  assert.deepEqual(saved, [
+    {
+      place: { name: '家', kind: 'home', radiusMeters: 150 },
+      sample: {
+        latitude: 30,
+        longitude: 120,
+        accuracy: 18,
+        timestamp: '2026-09-20T10:00:00.000Z',
+      },
+    },
+  ]);
   await act(async () => renderer.unmount());
 });

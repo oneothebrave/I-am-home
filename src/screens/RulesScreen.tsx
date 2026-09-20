@@ -8,9 +8,11 @@ import { isClockTime } from '../domain/validation';
 export function RulesScreen({
   schedule,
   onChangeSchedule,
+  showRiskExplanation = true,
 }: {
   schedule: GuardianSchedule;
   onChangeSchedule: (schedule: GuardianSchedule) => void;
+  showRiskExplanation?: boolean;
 }) {
   const [startTime, setStartTime] = useState(schedule.startTime);
   const [returnTime, setReturnTime] = useState(schedule.expectedReturnTime);
@@ -83,11 +85,13 @@ export function RulesScreen({
         />
       </Section>
 
-      <Section title="风险判断">
-        <InfoLine label="绿色" value="离家、到达劳作地、回家、有移动，都可以续上安全状态。" />
-        <InfoLine label="黄色" value="长时间停留、超过预计回家时间、低电量时先提醒本人。" />
-        <InfoLine label="红色" value="本人未响应，或多个风险叠加时通知家人。" />
-      </Section>
+      {showRiskExplanation && (
+        <Section title="风险判断">
+          <InfoLine label="绿色" value="离家、到达劳作地、回家、有移动，都可以续上安全状态。" />
+          <InfoLine label="黄色" value="长时间停留、超过预计回家时间、低电量时先提醒本人。" />
+          <InfoLine label="红色" value="本人未响应，或多个风险叠加时通知家人。" />
+        </Section>
+      )}
     </>
   );
 }

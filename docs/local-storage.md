@@ -4,15 +4,15 @@
 
 ## 数据边界
 
-`guardianSchema.ts` 定义 v2 状态：`schemaVersion`、`config`、`localEvents`、`isGuardianOn`、`mode`、`updatedAt`。演示事件只在明确创建演示状态时生成一次，不在每次渲染时拼入固定事件。
+`guardianSchema.ts` 定义 v3 状态：`schemaVersion`、`config`、`localEvents`、`isGuardianOn`、`isGuardianPaused`、`mode`、`updatedAt`。演示事件只在明确创建演示状态时生成一次，不在每次渲染时拼入固定事件。`isGuardianPaused` 用来区分用户主动暂停与设备暂时未运行，使满足条件后的自动守护不会覆盖用户意图。
 
 `validation.ts` 校验配置、事件、坐标、号码、时间、重复 ID 和能力上限。合法 JSON 不代表合法应用状态。未知版本和损坏数据会阻止加载，页面可重试，不能自动用默认配置覆盖旧数据。
 
 ## 迁移
 
-保留原 key `@daojia_shuo_yisheng/guardian_state_v1`，其内容升级为 v2，避免遗漏旧安装数据。旧记录的 `HH:mm` 以 `updatedAt` 为上界，从后往前推断最近可能的本地日期，遇到跨午夜则回退一天。
+保留原 key `@daojia_shuo_yisheng/guardian_state_v1`，其内容升级为 v3，避免遗漏旧安装数据。旧记录的 `HH:mm` 以 `updatedAt` 为上界，从后往前推断最近可能的本地日期，遇到跨午夜则回退一天。
 
-旧格式没有保存实际日期，因此这只是有说明的兼容迁移，不能保证恢复原始日期。旧通知没有接收人或告警 ID 时不猜测身份，也不会计入新的通知进度。v2 新事件必须有完整时间。
+旧格式没有保存实际日期，因此这只是有说明的兼容迁移，不能保证恢复原始日期。旧通知没有接收人或告警 ID 时不猜测身份，也不会计入新的通知进度。v2 及后续版本的新事件必须有完整时间。
 
 ## 加载和保存
 
