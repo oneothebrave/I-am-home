@@ -8,6 +8,7 @@ yarn-error.log*
 
 ios/Pods/
 ios/build/
+.build/
 ios/.xcode.env.local
 ios/*.xcworkspace/xcuserdata/
 ios/*.xcodeproj/xcuserdata/
