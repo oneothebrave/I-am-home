@@ -55,6 +55,14 @@ final class GuardianRuntime {
         }
     }
 
+    func remember(_ error: Error) {
+        lastError = error
+    }
+
+    func clearLastError() {
+        lastError = nil
+    }
+
     private func report(_ error: Error) {
         lastError = error
         onError?(error)

@@ -1,5 +1,7 @@
 import type { GeoPoint, GuardianConfig, GuardianEvent, GuardianEventType } from './types';
 
+export type CurrentLocationSample = GeoPoint & { accuracy: number; timestamp: string };
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -27,6 +29,22 @@ export function parsePoint(value: unknown): GeoPoint {
   );
   check(value.accuracy === undefined || numberIn(value.accuracy, 0, 100_000), '定位精度无效。');
   return value as unknown as GeoPoint;
+}
+
+export function parseCurrentLocationSample(
+  value: unknown,
+  now = Date.now(),
+): CurrentLocationSample {
+  check(isRecord(value), '当前位置格式无效。');
+  const point = parsePoint(value);
+  check(
+    typeof point.accuracy === 'number' && point.accuracy <= 100,
+    '当前位置精度不足 100 米。',
+  );
+  check(isTimestamp(value.timestamp), '当前位置缺少有效测量时间。');
+  const age = now - Date.parse(value.timestamp);
+  check(age >= -5_000 && age <= 120_000, '当前位置已经过期，请重新采点。');
+  return { ...point, accuracy: point.accuracy, timestamp: new Date(value.timestamp).toISOString() };
 }
 
 export function parseGuardianConfig(value: unknown): GuardianConfig {

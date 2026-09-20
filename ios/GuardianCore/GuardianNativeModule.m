@@ -12,6 +12,9 @@ RCT_EXTERN_METHOD(getPermissions:(RCTPromiseResolveBlock)resolve
 RCT_EXTERN_METHOD(getCurrentStatus:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(getCurrentLocation:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(getPendingEvents:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 

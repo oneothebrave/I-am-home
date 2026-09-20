@@ -4,23 +4,26 @@ import type { NativeEventQueue } from './guardianEventSync';
 
 export type PermissionState = {
   location: 'notDetermined' | 'denied' | 'restricted' | 'whenInUse' | 'always';
+  locationAccuracy: 'unknown' | 'reduced' | 'full';
   motion: 'notDetermined' | 'denied' | 'restricted' | 'authorized';
   notifications: 'notDetermined' | 'denied' | 'authorized';
+};
+export type GuardianNativeStatus = {
+  isGuardianOn: boolean;
+  isMonitoring: boolean;
+  pendingEventCount: number;
+  lastError?: string;
 };
 export type GuardianNativeModule = NativeEventQueue & {
   addListener: (eventName: string) => void;
   removeListeners: (count: number) => void;
   requestPermissions: () => Promise<void>;
   getPermissions: () => Promise<PermissionState>;
+  getCurrentLocation: () => Promise<unknown>;
   startGuardian: (config: GuardianConfig) => Promise<void>;
   stopGuardian: () => Promise<void>;
   setGeofences: (geofences: GuardianConfig['geofences']) => Promise<void>;
-  getCurrentStatus: () => Promise<{
-    isGuardianOn: boolean;
-    isMonitoring: boolean;
-    pendingEventCount: number;
-    lastError?: string;
-  }>;
+  getCurrentStatus: () => Promise<GuardianNativeStatus>;
   confirmSafe: () => Promise<void>;
   sendSOS: () => Promise<void>;
 };

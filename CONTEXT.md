@@ -28,10 +28,12 @@
 
 - 默认运行在明确标识的演示模式，不发送真实通知。
 - React Native 页面、领域规则、本地持久化抽象和 JavaScript 到 Swift 的事件协议已经实现。
-- iOS Swift 核心源码和 XCTest 示例已经写入仓库，但仓库尚无可直接构建的完整 Xcode iOS 工程。
-- Swift 代码尚未在 Mac 上编译；后台定位、进程被系统终止后的恢复、耗电和真机通知均未验证。
-- `GuardianBootstrap.restore()` 已提供，但尚未接入真实 AppDelegate 启动流程。
-- 地点页的“当前位置”仍是模拟采点；`mockData.ts` 中的经纬度只用于演示，不应改成某个用户的固定真实地址。正式能力应由 App 内真实采点或地图选点产生。
+- 仓库已包含可直接构建的 React Native iOS workspace；Swift 核心已加入 App target，4 项 XCTest 已加入无宿主测试 target。
+- Swift 代码已用 Xcode 27 在 iOS 27 模拟器编译、启动并通过 4 项 XCTest；后台定位、进程被系统终止后的恢复、耗电和真机通知仍未验证。
+- `GuardianBootstrap.restore()` 已在 AppDelegate 中接入 React Native factory 创建前的启动流程；这不等于真机后台唤醒已经验证。
+- 地点页已支持真实设备模式下的当前位置采点；进入设备模式会先清除演示地点、事件和联系人，避免把 `mockData.ts` 的演示经纬度同步到原生围栏。地图选点仍未实现。
+- 真实采点要求定位已授权、精确位置开启、样本不超过 2 分钟且水平精度在 100 米内。新增、删除和半径调整会串行同步到 Swift，失败会显示并允许重试。
+- 设备模式守护开关已接入 Swift `startGuardian` / `stopGuardian`。开启前要求至少一个真实地点、Always 定位、精确位置和成功的围栏同步；原生确认成功后才更新 JS 状态，失败会回读原生状态并回滚。App 启动和回到前台时会重新核对 `getCurrentStatus()`，明确显示后台监控、权限不足、配置未同步或原生错误。
 - 当前没有真实 CoreMotion 采集执行器、后台定时风险评估器、APNs/短信通知、家人端、账户系统或服务端送达回执。
 - CI 位于 `.github/workflows/checks.yml`，使用 Windows + Node 24 执行安装、类型检查、测试和 iOS JavaScript bundle。交接时尚未在本文档中记录远端 CI 的实际运行结论，请自行查看 GitHub Actions。
 
@@ -74,13 +76,14 @@
 - `GuardianRuntime.swift`：独立于 React Native 监听器的运行时、启动恢复和失败缓冲。
 - `GuardianNativeModule.swift/.m`：React Native bridge，提供权限、启动/停止、围栏、状态、待处理事件、确认消费、SOS 和安全确认接口。
 - `src/native/guardianEventSync.ts`：先把原生事件持久化到 JS 状态，再向原生确认消费；失败时保留原生队列以便重放。
-- `ios/GuardianCoreTests/GuardianCoreTests.swift`：4 个待在 Xcode 中运行的 XCTest 示例。
+- `ios/GuardianCoreTests/GuardianCoreTests.swift`：4 个已在 iOS 27 模拟器通过的 XCTest。
 
 ### 5. 测试与文档
 
-- Windows 上最后一次完整验证：`npm ci`、`npm run typecheck`、`npm test`、`npm run bundle:ios` 全部通过。
-- Node 测试共 42 项，覆盖领域规则、状态/存储竞态、React 组件和原生事件同步协议。
-- 42 项测试不包含 Swift 编译、XCTest、真实后台行为、UI 截图或 iPhone 真机测试。
+- Windows 基线及 2026-09-20 macOS 复验：`npm ci`、`npm run typecheck`、`npm test`、`npm run bundle:ios` 全部通过。
+- Node 测试共 50 项，覆盖领域规则、状态/存储竞态、React 组件、定位样本校验、原生事件、围栏同步与守护启停协议。
+- iOS Debug 工程已用 Xcode 27 编译并在 iOS 27 模拟器启动，4 项 Swift XCTest 全部通过。
+- 现有测试仍不包含真实后台行为、UI 截图或 iPhone 真机测试。
 - 详细重构说明：`docs/refactoring.md`。
 - 原始审查记录：`docs/reviews/2026-09-08-review.md`，它是历史基线，不代表当前仍存在其中所有问题。
 
@@ -91,10 +94,11 @@
 - `src/domain`：领域类型、事件归约、风险判断、升级流程、校验和通知文案。
 - `src/state`：纯 reducer、集中 store 和 React hook。
 - `src/storage`：schema、repository、AsyncStorage 和内存降级。
-- `src/native`：JS 原生桥契约与事件同步。
-- `ios/GuardianCore`：Swift 原生核心源码。
-- `ios/GuardianCoreTests`：尚未运行的 Swift 测试。
-- `tests`：Windows/Node 可执行的 42 项测试。
+- `src/native`：JS 原生桥契约、事件同步与串行围栏同步。
+- `ios/DaojiaShuoYisheng.xcworkspace`：安装 Pods 后应打开的 iOS workspace。
+- `ios/GuardianCore`：已加入 App target 的 Swift 原生核心源码。
+- `ios/GuardianCoreTests`：已加入测试 target 并在模拟器通过的 Swift 测试。
+- `tests`：Windows/Node 可执行的 50 项测试。
 - `docs`：产品、风险、升级、存储、iOS 接入和重构文档。
 
 ## 五、新电脑接手后的第一轮操作
@@ -119,23 +123,31 @@
 
 3. 不要仅凭文档假设测试仍通过。记录当前 commit、命令输出和任何环境差异。
 
-4. 如果新电脑是 Mac，先检查 macOS、Xcode、CocoaPods/Ruby 和 React Native 0.82 的兼容性，再创建或补齐 iOS 工程。不要先大规模重写 Swift 源码。
+4. 如果新电脑是 Mac，使用 `mise.toml` 固定的 Ruby，先将 Bundler/CocoaPods 安装在项目内，再生成 Pods：
+
+   ```bash
+   mise exec -- bundle config set --local path vendor/bundle
+   mise exec -- bundle install
+   mise exec -- bundle exec pod install --project-directory=ios
+   ```
+
+   不需要 Watchman。打开 `ios/DaojiaShuoYisheng.xcworkspace`，不要打开 `.xcodeproj`。
 
 ## 六、下一步，按优先级执行
 
-### P0：建立可编译的 iOS 工程
+### P0：建立可编译的 iOS 工程（已完成）
 
 1. 生成或补齐与 React Native 0.82 兼容的 iOS Xcode 工程，并保留现有 bundle identifier 决策空间。
 2. 将 `ios/GuardianCore` 文件加入 App target，将 `ios/GuardianCoreTests` 加入测试 target。
 3. 补齐 bridging/module 注册、React Native 依赖和构建设置。
 4. 在 Info.plist 增加定位和运动权限说明，并配置 `UIBackgroundModes/location`。
 5. 在 AppDelegate 启动阶段接入 `GuardianBootstrap.restore()`。
-6. 先让 Swift 编译和 4 个 XCTest 通过，再处理真机行为。若源码与当前 SDK 不兼容，做小范围兼容修复并补测试。
+6. Swift 编译、模拟器启动和 4 个 XCTest 已通过。Xcode 27 所需的 UIScene 接入，以及 React Native 0.82 / Apple Clang 21 的小范围 Pods 兼容修复，均已纳入工程。
 
 ### P1：打通真实设备模式
 
-1. 用 iPhone 当前位置或地图选点替代模拟坐标，确保用户可理解和修正定位误差。
-2. 把页面配置同步到原生围栏，并显示 Always Location、精确位置、运动和通知权限的真实状态。
+1. iPhone 当前位置采点已实现；下一步补地图选点和采点位置的可视化复核。
+2. 页面地点配置、定位/精度状态、Always Location 升级引导和守护开关已接入原生围栏；下一步补运动和通知权限的完整申请与能力展示。
 3. 接入真正的运动/步数来源，明确各信号的更新时间和置信度。
 4. 增加后台风险评估与本人本地通知；不要依赖 JavaScript 常驻或普通定时器。
 5. 在 UI 中保持“未知”和“能力不可用”状态，禁止把缺失信号解释成安全。

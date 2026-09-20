@@ -1,8 +1,30 @@
 import Foundation
 import CoreLocation
 
-enum GuardianCoreError: Error {
-    case invalidConfiguration, unsupportedVersion, missingPermissions, missingBackgroundMode, unavailable
+enum GuardianCoreError: LocalizedError {
+    case invalidConfiguration
+    case unsupportedVersion
+    case missingPermissions
+    case missingPreciseLocation
+    case missingBackgroundMode
+    case locationRequestInProgress
+    case locationTimedOut
+    case invalidLocationSample
+    case unavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidConfiguration: return "守护地点配置无效。"
+        case .unsupportedVersion: return "本机守护数据版本不受支持。"
+        case .missingPermissions: return "请先允许此 App 使用定位。"
+        case .missingPreciseLocation: return "请在系统设置中为此 App 开启精确位置。"
+        case .missingBackgroundMode: return "工程尚未启用后台定位能力。"
+        case .locationRequestInProgress: return "正在获取位置，请稍候。"
+        case .locationTimedOut: return "获取当前位置超时，请到开阔处后重试。"
+        case .invalidLocationSample: return "当前位置过旧或精度不足 100 米，请稍后重试。"
+        case .unavailable: return "当前设备无法使用所需的定位能力。"
+        }
+    }
 }
 
 struct GuardianGeofence: Codable {

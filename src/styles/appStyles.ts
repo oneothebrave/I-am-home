@@ -2,6 +2,7 @@ import { StyleSheet } from 'react-native';
 
 export const styles = StyleSheet.create({
   errorText: { color: '#8A2E22', fontSize: 14, lineHeight: 20, marginBottom: 12 },
+  successText: { color: '#235D4C', fontSize: 14, lineHeight: 20, marginTop: 10 },
   safeArea: {
     flex: 1,
     backgroundColor: '#F7F4ED',
@@ -29,6 +30,16 @@ export const styles = StyleSheet.create({
     color: '#6D6A61',
     fontSize: 14,
     marginTop: 6,
+  },
+  runtimeText: {
+    color: '#8A2E22',
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
+    paddingRight: 12,
+  },
+  runtimeTextMonitoring: {
+    color: '#235D4C',
   },
   guardianSwitch: {
     alignItems: 'center',

@@ -209,6 +209,21 @@ test('repository serializes writes and snapshots values before awaiting', async 
   await Promise.all([one, two]);
   assert.equal((await driver.load()).isGuardianOn, false);
 });
+test('activating device mode clears demo coordinates, contacts and events before persistence', async () => {
+  const disk = durable();
+  const store = createGuardianStore(repository(disk), () => now);
+  await store.initialize();
+  assert.equal(store.activateDeviceMode(), true);
+  await store.flush();
+  const current = store.getSnapshot().data;
+  assert.equal(current.mode, 'device');
+  assert.deepEqual(current.config.geofences, []);
+  assert.deepEqual(current.config.contacts, []);
+  assert.deepEqual(current.localEvents, []);
+  assert.equal(current.isGuardianOn, false);
+  assert.equal((await disk.load()).mode, 'device');
+  assert.equal(store.activateDeviceMode(), false);
+});
 test('R06: a pending SOS survives hydration and is saved with loaded contacts', async () => {
   const gate = deferred();
   const disk = durable();

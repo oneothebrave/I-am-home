@@ -7,6 +7,8 @@ global.IS_REACT_ACT_ENVIRONMENT = true;
 const load = createLoader({
   '@react-native-async-storage/async-storage': {},
   'react-native': {
+    Alert: { alert() {} },
+    Linking: { async openSettings() {} },
     Text: 'Text',
     TextInput: 'TextInput',
     TouchableOpacity: 'TouchableOpacity',
@@ -20,6 +22,7 @@ const { createMemoryGuardianStorage } = load('src/storage/guardianStorage.ts');
 const { createInitialStoredState } = load('src/storage/guardianSchema.ts');
 const { useGuardian } = load('src/state/useGuardian.ts');
 const { RulesScreen } = load('src/screens/RulesScreen.tsx');
+const { PlacesScreen } = load('src/screens/PlacesScreen.tsx');
 const now = Date.parse('2026-09-08T10:00:00Z');
 
 test('React StrictMode loads once and renders an SOS queued before hydration', async () => {
@@ -96,4 +99,59 @@ test('rule time drafts accept editing but persist only valid completed times', a
   await act(async () => {
     renderer.unmount();
   });
+});
+
+test('device place form captures a real sample before reporting native sync success', async () => {
+  const captured = [];
+  let renderer;
+  await act(async () => {
+    renderer = create(
+      React.createElement(PlacesScreen, {
+        geofences: [],
+        geofenceSyncStatus: 'synced',
+        guardianStatus: '已暂停',
+        mode: 'device',
+        permissions: {
+          location: 'whenInUse',
+          locationAccuracy: 'full',
+          motion: 'notDetermined',
+          notifications: 'notDetermined',
+        },
+        onActivateDeviceMode() {},
+        onAdjustRadius() {},
+        async onCaptureCurrentLocation(place) {
+          captured.push(place);
+          return {
+            latitude: 30,
+            longitude: 120,
+            accuracy: 18,
+            timestamp: '2026-09-20T10:00:00.000Z',
+          };
+        },
+        async onRefreshPermissions() {},
+        onRemoveGeofence() {},
+        async onRequestPermissions() {},
+        async onRetryGeofenceSync() {},
+      }),
+    );
+  });
+  const button = renderer.root
+    .findAllByType('TouchableOpacity')
+    .find((node) =>
+      node
+        .findAllByType('Text')
+        .some((text) => text.children.join('') === '获取当前位置并同步围栏'),
+    );
+  assert.equal(button.props.disabled, false);
+  await act(async () => {
+    button.props.onPress();
+    await new Promise((resolve) => setImmediate(resolve));
+  });
+  assert.deepEqual(captured, [{ name: '菜地', kind: 'work', radiusMeters: 320 }]);
+  assert.ok(
+    renderer.root
+      .findAllByType('Text')
+      .some((text) => text.children.join('').includes('精度约 18 米')),
+  );
+  await act(async () => renderer.unmount());
 });

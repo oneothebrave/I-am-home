@@ -11,7 +11,7 @@
 | React StrictMode 加载、规则表单草稿 | 组件测试通过，原生控件被测试替身替换 |
 | v2 schema、旧数据迁移、完整日期、稳定 ID | 已实现，校验和跨午夜迁移测试通过 |
 | 原生事件先落盘再确认消费 | JS 侧测试通过；Swift 队列源码及 XCTest 已提供 |
-| 原生定位质量过滤、持久配置、启动恢复入口 | 源码已重构，待 Mac 编译及真机验证 |
+| 原生定位质量过滤、持久配置、启动恢复入口 | 已接入 iOS target、通过 Mac 编译和 XCTest；待真机验证 |
 | 类型检查、iOS JS 发布包、Windows CI 配置 | 本地检查已执行；远端 CI 尚未运行 |
 
 ## 已覆盖的审查问题
@@ -27,7 +27,7 @@
 
 ## 运行验证
 
-本次 Windows 验证结果：`npm ci`、`npm run typecheck`、`npm run bundle:ios` 均通过，`npm test` 共 42 项全部通过，`git diff --check` 无错误。4 项 Swift XCTest 未执行，远端 GitHub Actions 尚未运行。
+Windows 基线验证：`npm ci`、`npm run typecheck`、`npm run bundle:ios` 均通过。2026-09-20 又在 macOS 上用 Node 26、Xcode 27 和 iOS 27 模拟器重复执行检查；当前 `npm test` 共 50 项全部通过，iOS Debug 编译、模拟器启动与 4 项 Swift XCTest 也全部通过。远端 GitHub Actions 尚未在本文档中记录结论。
 
 ```powershell
 npm ci
@@ -44,8 +44,10 @@ npm run bundle:ios
 
 ## 仍待开发或验证
 
-默认页面明确为演示模式，不发送真实通知。设备模式是预留的数据和原生事件消费路径，尚未开放真实守护开关。没有完整 Xcode 工程，`GuardianBootstrap.restore()` 仍需接入 AppDelegate。
+默认页面明确为演示模式，不发送真实通知。设备模式已开放真实守护开关：开启前检查真实地点、Always 定位、精确位置和围栏同步，启停操作串行调用 Swift，并在原生确认后更新 JS；启动、回前台和原生错误时会回读状态。仓库现已包含完整 Xcode workspace，`GuardianBootstrap.restore()` 已在 React Native 启动前接入 AppDelegate；这只证明工程集成与模拟器启动，不证明后台恢复已在真机生效。
 
-自动无运动/未回家判断的后台执行器、实际运动采集、地图/真实当前位置采点、本人本地通知、家人 APNs/短信和送达回执仍属后续功能。不要把领域规则测试或 JS bundle 成功当作这些功能已经完成。
+Xcode 27 开始要求使用 UIKit scene 生命周期，工程已通过 `SceneDelegate` 和 `UIApplicationSceneManifest` 完成迁移。React Native 0.82 所带 `fmt` 在 Apple Clang 21 下还需要 Podfile 中的兼容补丁；`pod install` 会可重复地应用该补丁，并将所有 Pods 的最低部署版本对齐到 React Native 支持范围。
+
+真实设备模式现在可以清除演示数据、读取定位与精确位置权限、获取一次真实位置、同步原生围栏并启停后台守护。定位样本必须在 2 分钟内且水平精度不超过 100 米；围栏和启停操作均串行处理快速变化，并暴露失败、回滚与重试。地图选点、自动无运动/未回家判断的后台执行器、实际运动采集、本人本地通知、家人 APNs/短信和送达回执仍属后续功能。
 
 旧 `HH:mm` 记录的原始日期无法精确恢复，迁移按保存时间推断并保留说明。未带接收人 ID 的旧演练通知不会被猜测为已通知某位家人。

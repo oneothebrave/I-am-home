@@ -16,7 +16,9 @@ export function guardianReducer(
     case 'config':
       return { ...data, config: action.config };
     case 'enabled':
-      return { ...data, isGuardianOn: action.enabled };
+      return data.isGuardianOn === action.enabled
+        ? data
+        : { ...data, isGuardianOn: action.enabled };
     case 'reset':
       return action.data;
     case 'events': {
