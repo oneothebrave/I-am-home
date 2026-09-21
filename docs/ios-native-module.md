@@ -1,6 +1,6 @@
 # iOS 原生模块
 
-当前源码已加入 `DaojiaShuoYisheng` App target，并在 Xcode 27 / iOS 27 模拟器完成 Debug 编译；13 项 Swift XCTest 均通过。尚未完成 iPhone 真机上的长时间后台计时、权限变化、耗电和系统终止恢复验证。
+当前源码已加入 `DaojiaShuoYisheng` App target，并在 Xcode 27 / iOS 27 模拟器完成 Debug 编译；21 项 Swift XCTest 均通过。尚未完成 iPhone 真机上的长时间后台计时、权限变化、耗电和系统终止恢复验证。
 
 ## 职责
 
@@ -8,10 +8,12 @@
 - `GuardianEventStore` 将围栏配置、启停状态、通知联系人、Critical Messaging 待发送操作和未消费事件保存到 Application Support。写入使用原子替换；读取损坏或未知版本时返回错误，不重建默认数据覆盖旧内容。
 - `GuardianEvent` 在创建时生成 ID，序列化和重放时保持 ID；保留测量时间和接收时间，未知电量不转换为负数百分比。
 - `GuardianLocationPolicy` 拒绝超过 120 秒、超前 5 秒、精度大于 100 米或无效的位置。初次定位不算移动，移动距离必须超过 50 米及两次测量精度之和，比较样本间隔不超过 120 秒。这是待实测调整的保守策略。
-- `GuardianInactivityState` 只在确认离开所有“家”围栏、且当前处于每日单段守护时段时计时，可信位移、Core Motion 活动或步数会续期；回家或离开守护时段会清除计时。达到阈值只生成一条 `NO_MOTION_FOR_LONG_TIME`，恢复移动后才允许下一次触发。阈值、时段、状态、联系人和短信操作随原生存储 v4 持久化，v1/v2/v3 文件会原地迁移。
+- `GuardianInactivityState` 只在确认离开所有“家”围栏、且当前处于每日单段守护时段时计时，可信位移、Core Motion 活动或步数会续期；回家或离开守护时段会清除计时。达到阈值只生成一条 `NO_MOTION_FOR_LONG_TIME`，恢复移动后才允许下一次触发。阈值、时段、状态、联系人、逐联系人授权和短信操作随原生存储 v5 持久化，v1/v2/v3/v4 文件会原地迁移。
 - `GuardianCriticalMessagingGateway` 已按 iOS 18.2 的 `MSCriticalSMSMessenger` 编译真实的授权检查、授权申请和发送调用；当前 target 没有 Critical Messaging entitlement，配置开关保持关闭，因此不会实际发送。
+- `GuardianCriticalMessagingCoordinator` 只在 App 位于后台时提交短信；前台生成或恢复的操作会等待下一次后台机会。每位联系人独立经历 `prepared`、`sending`、`retryScheduled`、`accepted`、`failed`、`restricted`、`expired` 或 `cancelled`，授权与结果均持久化。
+- 默认策略为 30 分钟有效期、最多 3 次尝试、失败后 1 分钟和 5 分钟重试、同一联系人 10 分钟冷却。提交前先原子写入 `sending`；若进程在结果返回前消失，2 分钟后标记为结果未知并停止自动重试，优先避免重复短信。
 - 生成无活动异常时，风险事件、检测状态和每位家人的待发送短信操作一次原子写入。状态页读取并展示这些操作，不能把 `prepared` 解释为 `sent`。
-- 异常落盘后会为优先级最高的第 1 位家人生成与前台测试相同的 `shortcuts://run-shortcut` 输入，并立即尝试打开唯一命名的“到家了么短信通知 V3”。尝试时间、是否仍待尝试、iOS 是否接受打开请求及失败原因独立持久化；接受打开不等于信息动作执行，更不等于短信已发送或送达。旧版本生成的历史操作不会被自动补发。
+- 原生风险检测不会打开 `shortcuts://run-shortcut`。快捷指令仅用于用户在“家人联系方式”中主动发送测试短信；历史快捷指令尝试字段继续兼容读取，但旧的待尝试操作会在原生存储加载时关闭，不会补发。
 - 离家期间启用百米级、50 米距离过滤的连续定位以及运动信号；在家时停止这部分采集。此设计用于争取后台回调，并不保证 iOS 在任何系统状态下都能精确到分钟触发，仍需真机做锁屏、终止和耗电验证。
 - 恢复时只增删实际发生变化的系统围栏，不再先停止全部围栏；同时恢复重大位置变化和 Visit 监听。Core Location 唤醒、普通启动、回到前台、系统时间明显变化及重启后受保护数据首次可用时都会进入同一套幂等恢复流程。
 - 原生恢复先取得新的可信位置并重放可用的 Core Motion 历史，再判断无活动是否超时，避免进程恢复瞬间直接使用过期内存状态报警。后台恢复期间使用有限的 UIKit background task，降低系统在恢复中途再次挂起进程的概率。
@@ -40,6 +42,8 @@ setNoMotionThresholdMinutes(value: number): Promise<void>
 setActiveWindow(schedule: GuardianSchedule): Promise<void>
 setNotificationContacts(contacts: GuardianContact[]): Promise<void>
 getCriticalMessagingPreparation(): Promise<unknown>
+requestCriticalMessagingAuthorization(): Promise<unknown>
+refreshCriticalMessagingAuthorization(): Promise<unknown>
 getCurrentStatus(): Promise<{
   isGuardianOn: boolean;
   isMonitoring: boolean;
@@ -70,9 +74,9 @@ sendSOS(): Promise<void>
 
 `startGuardian` 要求至少一个围栏、Always 权限、精确位置、后台 location 配置、合法的单段守护时段与受支持的区域监控；配置超过上限或含非法数据时拒绝，不静默截断。“家外长时间无明显移动”规则还要求至少一个地点类型为“家”，缺少“家”不会阻止其他围栏守护，但不会启动该规则。时段开始时间包含、结束时间不包含；时段外停止运动和连续定位采集并清零未完成的无活动周期，围栏及重大位置变化仍全天工作。实际区域注册仍是异步操作，失败通过 `GuardianError` 和状态接口暴露。事件通知为 `GuardianEvent`。
 
-风险事件直接进入家人通知队列，不向本人发送本地确认通知，也不提供“我没事”按钮。原生检测会在保存新异常后尝试运行短信快捷指令，但锁屏或后台状态下 iOS 可能拒绝把快捷指令 App 带到前台。系统回调只记录为 `shortcutOpenSucceeded`，不会据此把 Critical Messaging 操作标记为 `sent`。
+风险事件直接进入家人通知队列，不向本人发送本地确认通知，也不提供“我没事”按钮。原生检测只保存风险和 Critical Messaging 待发送操作，不会自动运行短信快捷指令；快捷指令的人工测试结果也不能把 Critical Messaging 操作标记为 `sent`。
 
-Critical Messaging 需要 iOS 18.2 或更高版本、`com.apple.developer.messages.critical-messaging` entitlement、`NSCriticalMessagingUsageDescription` 以及用户针对收件人的授权。Apple 规定 `send` 只能在 App 位于后台时调用；前台调用会返回不支持。当前只完成待发送操作和 API 适配器，自动发送协调器与 entitlement 尚未启用。
+Critical Messaging 需要 iOS 18.2 或更高版本、`com.apple.developer.messages.critical-messaging` entitlement、`NSCriticalMessagingUsageDescription` 以及用户针对收件人的授权。Apple 规定 `send` 只能在 App 位于后台时调用；前台调用会返回不支持。发送协调器、逐联系人授权和持久化状态机已接入，但当前 target 仍没有 entitlement，`GuardianCriticalMessagingEnabled` 也保持为 `false`，因此不会实际调用发送 API。
 
 ## 启动恢复
 
@@ -91,7 +95,7 @@ GuardianBootstrap.restore(reason: "application-launch")
 
 ## Mac 验证
 
-`ios/GuardianCoreTests/GuardianCoreTests.swift` 提供 13 项 XCTest，覆盖单段时段边界、跨休息时间清零、1 分钟测试阈值、只在家外触发、单次去重、移动恢复、回家取消、风险事件与短信操作原子持久化、旧原生数据迁移，以及不重复替换配置未变化的系统围栏；在 iOS 27 模拟器全部通过，不依赖 Metro。
+`ios/GuardianCoreTests/GuardianCoreTests.swift` 提供 21 项 XCTest，覆盖单段时段边界、跨休息时间清零、1 分钟测试阈值、只在家外触发、单次去重、移动恢复、回家取消、风险事件与短信操作原子持久化、逐联系人授权、三次尝试上限、冷却、过期、恢复取消、未知发送结果不重试、旧原生数据迁移，以及不重复替换配置未变化的系统围栏；在 iOS 27 模拟器全部通过，不依赖 Metro。
 
 Ruby 版本由根目录 `mise.toml` 固定，Bundler 依赖安装在 `vendor/bundle`，无需全局安装 CocoaPods。执行：
 

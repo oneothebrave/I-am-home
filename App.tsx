@@ -37,7 +37,7 @@ import {
   type GeofenceSyncStatus,
 } from './src/native/guardianGeofenceSync';
 import { MyScreen } from './src/screens/MyScreen';
-import { OverviewScreen } from './src/screens/OverviewScreen';
+import { describeCurrentPlace, OverviewScreen } from './src/screens/OverviewScreen';
 import { PlacesScreen, type NewCurrentLocationPlace } from './src/screens/PlacesScreen';
 import { createGuardianStore } from './src/state/guardianStore';
 import { useGuardian } from './src/state/useGuardian';
@@ -280,6 +280,16 @@ function App(): React.JSX.Element {
       }),
     [config.schedule.noMotionThresholdMinutes, localEvents, now],
   );
+
+  const refreshDiagnostics = async () => {
+    setNativeError('');
+    await Promise.all([
+      refreshPermissions(),
+      refreshCriticalMessaging(),
+      refreshCurrentPlace(),
+      guardianControl.current?.refresh() ?? Promise.resolve(),
+    ]);
+  };
 
   const deviceGuardianDescription = useMemo(
     () =>
@@ -631,8 +641,15 @@ function App(): React.JSX.Element {
           {isHydrated && activeTab === 'me' && (
             <MyScreen
               contacts={config.contacts}
+              criticalMessaging={criticalMessaging}
+              currentLocation={currentLocation}
+              currentLocationState={currentLocationState}
+              currentPlace={describeCurrentPlace(snapshot, config.geofences, currentLocation)}
+              geofenceCount={config.geofences.length}
               geofenceSyncStatus={geofenceSyncStatus}
+              guardianStatus={guardianControlState.nativeStatus}
               events={snapshot.events}
+              mode={mode}
               now={now}
               permissions={permissions}
               schedule={config.schedule}
@@ -648,6 +665,7 @@ function App(): React.JSX.Element {
               onChangeSchedule={(schedule) => {
                 store.updateConfig((current) => ({ ...current, schedule }));
               }}
+              onRefreshDiagnostics={refreshDiagnostics}
               onRefreshPermissions={async () => {
                 setNativeError('');
                 await refreshPermissions();
@@ -660,6 +678,16 @@ function App(): React.JSX.Element {
                     .sort((a, b) => a.priority - b.priority)
                     .map((contact, index) => ({ ...contact, priority: index + 1 })),
                 }));
+              }}
+              onRequestCriticalMessagingAuthorization={async () => {
+                setNativeError('');
+                await getGuardianNative().requestCriticalMessagingAuthorization();
+                await refreshCriticalMessaging();
+              }}
+              onRefreshCriticalMessagingAuthorization={async () => {
+                setNativeError('');
+                await getGuardianNative().refreshCriticalMessagingAuthorization();
+                await refreshCriticalMessaging();
               }}
               onRequestMotionPermission={requestMotionPermission}
               onRequestPermissions={requestLocationPermissions}

@@ -72,7 +72,6 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
     var onEvent: ((GuardianEvent) -> Void)?
     var onError: ((Error) -> Void)?
     var onBackgroundCheckNeeded: ((Date?) -> Void)?
-    var onShortcutNotificationRequested: ((GuardianCriticalMessageOperation) -> Void)?
     var authorization: CLAuthorizationStatus { manager.authorizationStatus }
     var accuracyAuthorization: CLAccuracyAuthorization { manager.accuracyAuthorization }
 
@@ -621,24 +620,12 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
             contacts: store.notificationContacts,
             thresholdMinutes: minutes
         )
-        // A foreground restoration must not unexpectedly send an overdue background alert.
-        if restorationInProgress && UIApplication.shared.applicationState != .background {
-            for index in criticalMessages.indices {
-                criticalMessages[index].shortcutAttemptPending = false
-                criticalMessages[index].shortcutAttemptError = "恢复守护时发现停留超时，已准备短信；未在打开 App 时自动补发。"
-            }
-        }
         for index in criticalMessages.indices {
             criticalMessages[index].detectionContext = UIApplication.shared.applicationState == .background ? "background" :
                 (restorationInProgress ? "restoration" : "foreground")
         }
         guard persist(state, with: event, criticalMessages: criticalMessages) else { return }
         onEvent?(event)
-        if let firstShortcutOperation = criticalMessages.first(where: {
-            $0.shortcutAttemptPending == true
-        }) {
-            onShortcutNotificationRequested?(firstShortcutOperation)
-        }
         scheduleBackgroundCheck(after: date)
     }
 

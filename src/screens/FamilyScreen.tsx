@@ -2,24 +2,57 @@ import React, { useState } from 'react';
 import { Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { InfoLine, Section } from '../components/Primitives';
 import type { GuardianContact } from '../domain/types';
+import type { CriticalMessagingPreparation } from '../native/criticalMessaging';
 import { styles } from '../styles/appStyles';
 import { isPhone, normalizePhone } from '../domain/validation';
 import { createId } from '../utils/id';
 
+function latestOperationLabel(
+  operation: CriticalMessagingPreparation['operations'][number] | undefined,
+) {
+  if (!operation) return '暂无告警';
+  switch (operation.status) {
+    case 'prepared':
+      return '最近：等待后台发送';
+    case 'sending':
+      return `最近：正在提交（第 ${operation.attemptCount} 次）`;
+    case 'retryScheduled':
+      return `最近：等待重试（已尝试 ${operation.attemptCount} 次）`;
+    case 'accepted':
+      return '最近：系统已接受';
+    case 'failed':
+      return '最近：发送失败';
+    case 'restricted':
+      return '最近：发送受限';
+    case 'expired':
+      return '最近：已过有效期';
+    case 'cancelled':
+      return '最近：风险已解除';
+  }
+}
+
 export function FamilyScreen({
   contacts,
+  criticalMessaging,
   onAddContact,
   onInstallShortcut,
   onRemoveContact,
+  onRequestCriticalMessagingAuthorization,
+  onRefreshCriticalMessagingAuthorization,
   onSendTestNotification,
+  criticalMessagingAuthorizationPending = false,
   testNotificationPending = false,
   showNotificationPolicy = true,
 }: {
   contacts: GuardianContact[];
+  criticalMessaging?: CriticalMessagingPreparation;
   onAddContact: (contact: GuardianContact) => void;
   onInstallShortcut: () => void;
   onRemoveContact: (id: string) => void;
+  onRequestCriticalMessagingAuthorization: () => void;
+  onRefreshCriticalMessagingAuthorization: () => void;
   onSendTestNotification: () => void;
+  criticalMessagingAuthorizationPending?: boolean;
   testNotificationPending?: boolean;
   showNotificationPolicy?: boolean;
 }) {
@@ -30,6 +63,27 @@ export function FamilyScreen({
   const canAddMore = contacts.length < 3;
   const [error, setError] = useState('');
   const firstContact = [...contacts].sort((a, b) => a.priority - b.priority)[0];
+  const authorizationByContact = new Map(
+    criticalMessaging?.authorizations.map((authorization) => [
+      authorization.contactId,
+      authorization.status,
+    ]) ?? [],
+  );
+  const authorizationLabel = {
+    unknown: '尚未授权',
+    approved: '已允许',
+    denied: '未允许',
+    unavailable: '暂时无法读取',
+  } as const;
+  const latestOperationByContact = new Map<
+    string,
+    CriticalMessagingPreparation['operations'][number]
+  >();
+  for (const operation of criticalMessaging?.operations ?? []) {
+    const current = latestOperationByContact.get(operation.contactId);
+    if (!current || Date.parse(operation.statusUpdatedAt) > Date.parse(current.statusUpdatedAt))
+      latestOperationByContact.set(operation.contactId, operation);
+  }
 
   const handleAddContact = () => {
     if (!canAddMore || !name.trim() || !phone.trim()) {
@@ -153,7 +207,62 @@ export function FamilyScreen({
         </Section>
       )}
 
-      <Section title="短信快捷指令">
+      <Section title="Apple 关键短信">
+        <Text style={styles.settingHelpText}>
+          {criticalMessaging?.buildConfigured
+            ? '授权后，系统检测到有效风险时可在后台直接向家人发送短信。系统接受发送不代表家人已经阅读。'
+            : '当前安装包尚未启用 Apple 关键短信。发送状态机已经就绪，但现在只会在本机准备并记录告警。'}
+        </Text>
+        {contacts.map((contact) => {
+          const status = authorizationByContact.get(contact.id) ?? 'unknown';
+          const operation = latestOperationByContact.get(contact.id);
+          const authorization = criticalMessaging?.buildConfigured
+            ? authorizationLabel[status]
+            : '等待工程启用';
+          return (
+            <InfoLine
+              key={`critical-${contact.id}`}
+              label={contact.name}
+              value={`${authorization} · ${latestOperationLabel(operation)}`}
+            />
+          );
+        })}
+        {criticalMessaging?.buildConfigured && contacts.length > 0 && (
+          <>
+            <TouchableOpacity
+              accessibilityRole="button"
+              activeOpacity={0.8}
+              disabled={criticalMessagingAuthorizationPending}
+              onPress={onRequestCriticalMessagingAuthorization}
+              style={[
+                styles.primaryButton,
+                criticalMessagingAuthorizationPending && styles.secondaryButtonDisabled,
+              ]}
+            >
+              <Text style={styles.primaryButtonText}>
+                {criticalMessagingAuthorizationPending ? '正在处理…' : '允许关键短信通知家人'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              accessibilityRole="button"
+              activeOpacity={0.8}
+              disabled={criticalMessagingAuthorizationPending}
+              onPress={onRefreshCriticalMessagingAuthorization}
+              style={[
+                styles.secondaryOutlineButton,
+                criticalMessagingAuthorizationPending && styles.secondaryButtonDisabled,
+              ]}
+            >
+              <Text style={styles.secondaryOutlineButtonText}>刷新关键短信授权</Text>
+            </TouchableOpacity>
+          </>
+        )}
+        <Text style={styles.shortcutFootnote}>
+          有效期 {criticalMessaging?.policy.validityMinutes ?? 30} 分钟，最多尝试 {criticalMessaging?.policy.maximumAttempts ?? 3} 次；风险解除或过期后不会补发。
+        </Text>
+      </Section>
+
+      <Section title="备用短信测试">
         <Text style={styles.settingHelpText}>
           测试短信由 iPhone 自带的“快捷指令”发出，不经过第三方通知平台，只需安装一次。
         </Text>
@@ -185,7 +294,7 @@ export function FamilyScreen({
           </Text>
         </TouchableOpacity>
         <Text style={styles.shortcutFootnote}>
-          新版名称为“到家了么短信通知 V3”，旧快捷指令可以保留，App 不会再调用它。前台可以主动测试；检测到家外长时间无活动时，App 也会尝试运行新版。锁屏或后台时 iOS 仍可能拒绝打开。首次无交互发送时，如果 iOS 显示“始终允许”，请选择它。可能产生短信费用。
+          快捷指令只在用户点击“发送测试短信”时运行，不参与风险自动通知。首次无交互发送时，如果 iOS 显示“始终允许”，请选择它。可能产生短信费用。
         </Text>
       </Section>
 

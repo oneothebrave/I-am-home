@@ -144,12 +144,55 @@ final class GuardianNativeModule: RCTEventEmitter {
     func getCriticalMessagingPreparation(resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
         perform(resolve, reject) { runtime in
             let store = try runtime.requireStore()
+            _ = try store.reconcileCriticalMessages()
             return [
                 "apiAvailable": GuardianCriticalMessagingCapability.apiAvailable,
                 "buildConfigured": GuardianCriticalMessagingCapability.enabledForBuild,
+                "automaticSendingEnabled": GuardianCriticalMessagingCapability.apiAvailable &&
+                    GuardianCriticalMessagingCapability.enabledForBuild,
+                "requiresBackgroundExecution": true,
+                "readiness": runtime.messagingCoordinator?.readiness ?? "unavailable",
                 "recipients": store.notificationContacts.sorted(by: { $0.priority < $1.priority }).map { $0.toDictionary() },
+                "authorizations": store.criticalMessagingAuthorizations.map { $0.toDictionary() },
+                "policy": GuardianCriticalMessagingPolicy.dictionary,
                 "operations": store.criticalMessageOperations.map { $0.toDictionary() }
             ] as [String: Any]
+        }
+    }
+
+    @objc(requestCriticalMessagingAuthorization:rejecter:)
+    func requestCriticalMessagingAuthorization(
+        resolve: @escaping RCTPromiseResolveBlock,
+        rejecter reject: @escaping RCTPromiseRejectBlock
+    ) {
+        DispatchQueue.main.async {
+            Task { @MainActor in
+                do {
+                    try await self.runtime.requestCriticalMessagingAuthorization()
+                    resolve(nil)
+                } catch {
+                    self.runtime.remember(error)
+                    reject("CRITICAL_MESSAGING_ERROR", error.localizedDescription, error)
+                }
+            }
+        }
+    }
+
+    @objc(refreshCriticalMessagingAuthorization:rejecter:)
+    func refreshCriticalMessagingAuthorization(
+        resolve: @escaping RCTPromiseResolveBlock,
+        rejecter reject: @escaping RCTPromiseRejectBlock
+    ) {
+        DispatchQueue.main.async {
+            Task { @MainActor in
+                do {
+                    try await self.runtime.refreshCriticalMessagingAuthorization()
+                    resolve(nil)
+                } catch {
+                    self.runtime.remember(error)
+                    reject("CRITICAL_MESSAGING_ERROR", error.localizedDescription, error)
+                }
+            }
         }
     }
 

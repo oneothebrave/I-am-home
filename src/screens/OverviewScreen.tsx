@@ -142,19 +142,21 @@ export function OverviewScreen({
       ) ?? newestMessage
     : undefined;
   const messagingTitle = latestMessage
-    ? latestMessage.status === 'sent'
-      ? '家人短信已发送'
-      : latestMessage.status === 'failed'
-        ? '家人短信发送失败'
-          : latestMessage.shortcutOpenSucceeded === true
-          ? '已尝试运行短信快捷指令'
-          : latestMessage.shortcutOpenSucceeded === false
-            ? '短信快捷指令未能启动'
-            : latestMessage.shortcutAttemptError
-              ? latestMessage.shortcutAttemptedAt ? '短信快捷指令结果未确认' : '短信未自动发送'
-            : latestMessage.shortcutAttemptedAt
-              ? '正在尝试运行短信快捷指令'
-              : '家人短信已准备'
+    ? latestMessage.status === 'accepted'
+      ? '系统已接受家人短信'
+      : latestMessage.status === 'sending'
+        ? '正在提交家人短信'
+        : latestMessage.status === 'retryScheduled'
+          ? '家人短信等待重试'
+          : latestMessage.status === 'failed'
+            ? '家人短信发送失败'
+            : latestMessage.status === 'restricted'
+              ? criticalMessaging?.buildConfigured ? '家人短信发送受限' : '家人短信已准备'
+              : latestMessage.status === 'expired'
+                ? '家人短信已过期'
+                : latestMessage.status === 'cancelled'
+                  ? '本次家人短信已取消'
+                  : '家人短信已准备'
     : criticalMessaging?.recipients.length
       ? '家人短信链路已准备'
       : '家人短信尚未准备';
@@ -223,14 +225,9 @@ export function OverviewScreen({
               latestMessage?.detectionContext === 'restoration' ? '恢复 App 时完成检测。' :
               latestMessage?.detectionContext === 'foreground' ? '检测时 App 在前台。' : ''}
             {criticalMessaging?.buildConfigured
-              ? 'Apple 关键短信能力已配置；实际发送结果会单独记录。'
-              : latestMessage?.shortcutOpenSucceeded === true
-                ? 'iOS 已接受打开快捷指令的请求；这不代表短信已经发送或送达。'
-                : latestMessage?.shortcutOpenSucceeded === false
-                  ? latestMessage.shortcutAttemptError ?? 'iOS 未允许打开快捷指令；待发送内容仍保存在本机。'
-                  : latestMessage?.shortcutAttemptError
-                    ? latestMessage.shortcutAttemptError
-                  : '当前未启用 Apple 关键短信；检测到异常后会尝试运行已安装的短信快捷指令。'}
+              ? latestMessage?.lastError ??
+                `Apple 关键短信能力已配置；已尝试 ${latestMessage?.attemptCount ?? 0}/${criticalMessaging.policy.maximumAttempts} 次。系统接受发送不代表家人已经阅读。`
+              : '当前未启用 Apple 关键短信；异常短信只会准备并保存在本机，不会自动运行快捷指令。'}
           </Text>
         </View>
       )}

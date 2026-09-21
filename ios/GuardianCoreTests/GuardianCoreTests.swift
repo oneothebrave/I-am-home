@@ -323,38 +323,218 @@ final class GuardianCoreTests: XCTestCase {
         XCTAssertEqual(restored.criticalMessageOperations, messages)
         XCTAssertEqual(restored.criticalMessageOperations.first?.status, .prepared)
         XCTAssertEqual(restored.criticalMessageOperations.first?.phoneNumber, "+8618768106491")
-        XCTAssertEqual(restored.criticalMessageOperations.first?.shortcutAttemptPending, true)
+        XCTAssertEqual(restored.criticalMessageOperations.first?.shortcutAttemptPending, false)
+        XCTAssertNil(restored.criticalMessageOperations.first?.shortcutAttemptedAt)
+        XCTAssertNil(restored.criticalMessageOperations.first?.shortcutOpenSucceeded)
+    }
 
-        let operation = try XCTUnwrap(restored.criticalMessageOperations.first)
-        let shortcutURL = try XCTUnwrap(GuardianShortcutNotification.url(for: operation))
-        let components = try XCTUnwrap(URLComponents(url: shortcutURL, resolvingAgainstBaseURL: false))
-        XCTAssertEqual(components.scheme, "shortcuts")
-        XCTAssertEqual(components.host, "run-shortcut")
+    func testCriticalMessagingRetriesPerContactAndStopsAfterThreeAttempts() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try GuardianEventStore(fileURL: directory.appendingPathComponent("state.json"))
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        var inactivity = GuardianInactivityState()
+        inactivity.leaveHome(at: startedAt)
+        XCTAssertTrue(inactivity.evaluate(at: startedAt.addingTimeInterval(60), thresholdMinutes: 1))
+        let risk = GuardianEvent(
+            type: .noMotionForLongTime,
+            title: "测试风险",
+            description: "测试",
+            timestamp: startedAt.addingTimeInterval(60),
+            source: "motion"
+        )
+        let contact = try GuardianNotificationContact(dictionary: [
+            "id": "family", "name": "家人", "phone": "+8613800000000", "priority": 1
+        ])
+        try store.setNotificationContacts([contact])
+        try store.append(
+            risk,
+            updatingInactivity: inactivity,
+            criticalMessages: GuardianCriticalMessageOperation.prepare(
+                for: risk,
+                contacts: [contact],
+                thresholdMinutes: 1
+            )
+        )
+        try store.updateCriticalMessagingAuthorizations(
+            [contact.applePhoneNumber: "approved"],
+            at: risk.timestamp
+        )
+
+        let operationId = try XCTUnwrap(store.criticalMessageOperations.first?.id)
+        XCTAssertEqual(store.readyCriticalMessageOperations(at: risk.timestamp).map(\.id), [operationId])
+
+        let first = try XCTUnwrap(store.beginCriticalMessageAttempt(id: operationId, at: risk.timestamp))
+        XCTAssertEqual(first.status, .sending)
+        XCTAssertEqual(first.attemptCount, 1)
+        try store.completeCriticalMessageAttempt(
+            id: operationId,
+            accepted: false,
+            errorCode: "sendFailed",
+            errorMessage: "暂时失败",
+            retryable: true,
+            at: risk.timestamp
+        )
+        XCTAssertEqual(store.criticalMessageOperations.first?.status, .retryScheduled)
         XCTAssertEqual(
-            components.queryItems?.first(where: { $0.name == "name" })?.value,
-            "到家了么短信通知 V3"
+            store.criticalMessageOperations.first?.nextAttemptAt,
+            risk.timestamp.addingTimeInterval(60)
         )
-        let payloadText = try XCTUnwrap(
-            components.queryItems?.first(where: { $0.name == "text" })?.value
-        )
-        let payload = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: Data(payloadText.utf8)) as? [String: String]
-        )
-        XCTAssertEqual(payload["phone"], "+8618768106491")
-        XCTAssertEqual(payload["message"], operation.messageText)
+        XCTAssertTrue(store.readyCriticalMessageOperations(at: risk.timestamp).isEmpty)
 
-        let attempted = try XCTUnwrap(
-            try restored.beginShortcutAttempt(operationId: operation.id, at: event.timestamp)
+        let secondAt = risk.timestamp.addingTimeInterval(61)
+        XCTAssertNotNil(try store.beginCriticalMessageAttempt(id: operationId, at: secondAt))
+        try store.completeCriticalMessageAttempt(
+            id: operationId,
+            accepted: false,
+            errorCode: "sendFailed",
+            errorMessage: "再次失败",
+            retryable: true,
+            at: secondAt
         )
-        XCTAssertEqual(attempted.shortcutAttemptedAt, event.timestamp)
-        XCTAssertNil(
-            try restored.beginShortcutAttempt(operationId: operation.id, at: event.timestamp)
+        XCTAssertEqual(
+            store.criticalMessageOperations.first?.nextAttemptAt,
+            secondAt.addingTimeInterval(5 * 60)
         )
-        try restored.completeShortcutAttempt(operationId: operation.id, succeeded: nil, error: "后台结果未知")
-        let completed = try XCTUnwrap(restored.criticalMessageOperations.first)
-        XCTAssertEqual(completed.shortcutAttemptPending, false)
-        XCTAssertNil(completed.shortcutOpenSucceeded)
-        XCTAssertEqual(completed.shortcutAttemptError, "后台结果未知")
+
+        let thirdAt = secondAt.addingTimeInterval(5 * 60 + 1)
+        XCTAssertNotNil(try store.beginCriticalMessageAttempt(id: operationId, at: thirdAt))
+        try store.completeCriticalMessageAttempt(
+            id: operationId,
+            accepted: false,
+            errorCode: "sendFailed",
+            errorMessage: "最终失败",
+            retryable: true,
+            at: thirdAt
+        )
+        XCTAssertEqual(store.criticalMessageOperations.first?.status, .failed)
+        XCTAssertEqual(store.criticalMessageOperations.first?.attemptCount, 3)
+        XCTAssertNil(store.criticalMessageOperations.first?.nextAttemptAt)
+    }
+
+    func testCriticalMessagingCancelsWhenRiskRecoversAndNeverReplaysOnOpen() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("state.json")
+        let store = try GuardianEventStore(fileURL: url)
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        var inactivity = GuardianInactivityState()
+        inactivity.leaveHome(at: startedAt)
+        XCTAssertTrue(inactivity.evaluate(at: startedAt.addingTimeInterval(60), thresholdMinutes: 1))
+        let risk = GuardianEvent(type: .noMotionForLongTime, title: "风险", description: "测试",
+            timestamp: startedAt.addingTimeInterval(60), source: "motion")
+        let contact = try GuardianNotificationContact(dictionary: [
+            "id": "family", "name": "家人", "phone": "+8613800000000", "priority": 1
+        ])
+        try store.setNotificationContacts([contact])
+        try store.append(risk, updatingInactivity: inactivity, criticalMessages:
+            GuardianCriticalMessageOperation.prepare(for: risk, contacts: [contact], thresholdMinutes: 1))
+        try store.append(GuardianEvent(
+            type: .motionDetected,
+            title: "重新检测到活动",
+            description: "测试",
+            timestamp: risk.timestamp.addingTimeInterval(10),
+            source: "pedometer"
+        ))
+
+        XCTAssertEqual(store.criticalMessageOperations.first?.status, .cancelled)
+        XCTAssertEqual(store.criticalMessageOperations.first?.lastErrorCode, "riskResolved")
+        let restored = try GuardianEventStore(fileURL: url)
+        XCTAssertEqual(restored.criticalMessageOperations.first?.status, .cancelled)
+        XCTAssertTrue(restored.readyCriticalMessageOperations(at: risk.timestamp.addingTimeInterval(20)).isEmpty)
+    }
+
+    func testCriticalMessagingExpiresAndUnknownSendingResultDoesNotRetry() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try GuardianEventStore(fileURL: directory.appendingPathComponent("state.json"))
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        var inactivity = GuardianInactivityState()
+        inactivity.leaveHome(at: startedAt)
+        XCTAssertTrue(inactivity.evaluate(at: startedAt.addingTimeInterval(60), thresholdMinutes: 1))
+        let risk = GuardianEvent(type: .noMotionForLongTime, title: "风险", description: "测试",
+            timestamp: startedAt.addingTimeInterval(60), source: "motion")
+        let contact = try GuardianNotificationContact(dictionary: [
+            "id": "family", "name": "家人", "phone": "+8613800000000", "priority": 1
+        ])
+        try store.setNotificationContacts([contact])
+        try store.append(risk, updatingInactivity: inactivity, criticalMessages:
+            GuardianCriticalMessageOperation.prepare(for: risk, contacts: [contact], thresholdMinutes: 1))
+        try store.updateCriticalMessagingAuthorizations([contact.applePhoneNumber: "approved"], at: risk.timestamp)
+        let operationId = try XCTUnwrap(store.criticalMessageOperations.first?.id)
+        XCTAssertNotNil(try store.beginCriticalMessageAttempt(id: operationId, at: risk.timestamp))
+        try store.reconcileCriticalMessages(
+            at: risk.timestamp.addingTimeInterval(GuardianCriticalMessagingPolicy.sendingLease + 1)
+        )
+        XCTAssertEqual(store.criticalMessageOperations.first?.status, .failed)
+        XCTAssertEqual(store.criticalMessageOperations.first?.lastErrorCode, "resultUnknown")
+
+        let secondRisk = GuardianEvent(type: .noMotionForLongTime, title: "风险2", description: "测试",
+            timestamp: risk.timestamp.addingTimeInterval(60 * 60), source: "motion")
+        var secondInactivity = GuardianInactivityState()
+        secondInactivity.leaveHome(at: secondRisk.timestamp.addingTimeInterval(-60))
+        XCTAssertTrue(secondInactivity.evaluate(at: secondRisk.timestamp, thresholdMinutes: 1))
+        try store.append(GuardianEvent(type: .motionDetected, title: "恢复", description: "测试",
+            timestamp: risk.timestamp.addingTimeInterval(10 * 60), source: "motion"))
+        try store.append(secondRisk, updatingInactivity: secondInactivity, criticalMessages:
+            GuardianCriticalMessageOperation.prepare(for: secondRisk, contacts: [contact], thresholdMinutes: 1))
+        try store.reconcileCriticalMessages(at: secondRisk.timestamp.addingTimeInterval(31 * 60))
+        XCTAssertEqual(store.criticalMessageOperations.last?.status, .expired)
+    }
+
+    func testCriticalMessagingTracksAuthorizationPerContactAndAppliesCooldown() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try GuardianEventStore(fileURL: directory.appendingPathComponent("state.json"))
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let first = try GuardianNotificationContact(dictionary: [
+            "id": "first", "name": "第一位", "phone": "+8613800000000", "priority": 1
+        ])
+        let second = try GuardianNotificationContact(dictionary: [
+            "id": "second", "name": "第二位", "phone": "+8613900000000", "priority": 2
+        ])
+        try store.setNotificationContacts([first, second])
+        var inactivity = GuardianInactivityState()
+        inactivity.leaveHome(at: startedAt)
+        XCTAssertTrue(inactivity.evaluate(at: startedAt.addingTimeInterval(60), thresholdMinutes: 1))
+        let risk = GuardianEvent(type: .noMotionForLongTime, title: "风险", description: "测试",
+            timestamp: startedAt.addingTimeInterval(60), source: "motion")
+        try store.append(risk, updatingInactivity: inactivity, criticalMessages:
+            GuardianCriticalMessageOperation.prepare(for: risk, contacts: [first, second], thresholdMinutes: 1))
+        try store.updateCriticalMessagingAuthorizations([
+            first.applePhoneNumber: "approved",
+            second.applePhoneNumber: "denied"
+        ], at: risk.timestamp)
+        XCTAssertEqual(store.readyCriticalMessageOperations(at: risk.timestamp).map(\.contactId), [first.id])
+        XCTAssertEqual(
+            store.criticalMessageOperations.first(where: { $0.contactId == second.id })?.status,
+            .restricted
+        )
+
+        let firstOperation = try XCTUnwrap(
+            store.criticalMessageOperations.first(where: { $0.contactId == first.id })
+        )
+        XCTAssertNotNil(try store.beginCriticalMessageAttempt(id: firstOperation.id, at: risk.timestamp))
+        try store.completeCriticalMessageAttempt(id: firstOperation.id, accepted: true, at: risk.timestamp)
+        try store.append(GuardianEvent(type: .motionDetected, title: "恢复", description: "测试",
+            timestamp: risk.timestamp.addingTimeInterval(60), source: "motion"))
+
+        var nextInactivity = GuardianInactivityState()
+        nextInactivity.leaveHome(at: risk.timestamp.addingTimeInterval(4 * 60))
+        XCTAssertTrue(nextInactivity.evaluate(
+            at: risk.timestamp.addingTimeInterval(5 * 60),
+            thresholdMinutes: 1
+        ))
+        let nextRisk = GuardianEvent(type: .noMotionForLongTime, title: "风险2", description: "测试",
+            timestamp: risk.timestamp.addingTimeInterval(5 * 60), source: "motion")
+        try store.append(nextRisk, updatingInactivity: nextInactivity, criticalMessages:
+            GuardianCriticalMessageOperation.prepare(for: nextRisk, contacts: [first], thresholdMinutes: 1))
+        let nextOperation = try XCTUnwrap(store.criticalMessageOperations.last)
+        XCTAssertEqual(nextOperation.status, .retryScheduled)
+        XCTAssertEqual(
+            nextOperation.cooldownUntil,
+            risk.timestamp.addingTimeInterval(GuardianCriticalMessagingPolicy.cooldownInterval)
+        )
     }
 
     func testVersionOneStoreMigratesWithoutLosingGuardianConfiguration() throws {
@@ -374,6 +554,6 @@ final class GuardianCoreTests: XCTestCase {
         XCTAssertNil(restored.activeWindow)
         XCTAssertEqual(restored.inactivity.homePresence, .unknown)
         let migrated = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
-        XCTAssertEqual(migrated?["version"] as? Int, 4)
+        XCTAssertEqual(migrated?["version"] as? Int, 5)
     }
 }

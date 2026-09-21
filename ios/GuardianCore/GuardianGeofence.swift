@@ -11,6 +11,7 @@ enum GuardianCoreError: LocalizedError {
     case locationTimedOut
     case invalidLocationSample
     case unavailable
+    case criticalMessagingUnavailable(String)
 
     var errorDescription: String? {
         switch self {
@@ -23,6 +24,7 @@ enum GuardianCoreError: LocalizedError {
         case .locationTimedOut: return "获取当前位置超时，请到开阔处后重试。"
         case .invalidLocationSample: return "当前位置过旧或精度不足 100 米，请稍后重试。"
         case .unavailable: return "当前设备无法使用所需的定位能力。"
+        case .criticalMessagingUnavailable(let message): return message
         }
     }
 }

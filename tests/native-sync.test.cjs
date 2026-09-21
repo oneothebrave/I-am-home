@@ -442,6 +442,8 @@ test('bridge export declarations match the TS queue and permission contract (sta
     'setActiveWindow',
     'setNotificationContacts',
     'getCriticalMessagingPreparation',
+    'requestCriticalMessagingAuthorization',
+    'refreshCriticalMessagingAuthorization',
     'sendSOS',
   ]) {
     assert.ok(swift.includes(`func ${method}(`));
@@ -473,7 +475,17 @@ test('critical messaging preparation validates recipients and pending operations
   const value = parseCriticalMessagingPreparation({
     apiAvailable: true,
     buildConfigured: false,
+    automaticSendingEnabled: false,
+    requiresBackgroundExecution: true,
+    readiness: 'buildNotConfigured',
     recipients: [{ id: 'family-1', name: '小林', phoneNumber: '+8613800000000', priority: 1 }],
+    authorizations: [],
+    policy: {
+      validityMinutes: 30,
+      maximumAttempts: 3,
+      retryDelaysSeconds: [60, 300],
+      cooldownMinutes: 10,
+    },
     operations: [
       {
         id: 'risk-1:family-1',
@@ -483,7 +495,11 @@ test('critical messaging preparation validates recipients and pending operations
         phoneNumber: '+8613800000000',
         messageText: '测试待发送内容',
         createdAt: '2026-09-21T01:00:00.000Z',
+        statusUpdatedAt: '2026-09-21T01:00:00.000Z',
         status: 'prepared',
+        authorizationStatus: 'unknown',
+        attemptCount: 0,
+        expiresAt: '2026-09-21T01:30:00.000Z',
         shortcutAttemptPending: false,
       },
     ],
@@ -494,4 +510,29 @@ test('critical messaging preparation validates recipients and pending operations
     () => parseCriticalMessagingPreparation({ ...value, operations: [{}] }),
     /格式无效/,
   );
+});
+
+test('native risk detection prepares Critical Messaging without auto-launching Shortcuts', () => {
+  const runtime = fs.readFileSync(
+    path.join(__dirname, '../ios/GuardianCore/GuardianRuntime.swift'),
+    'utf8',
+  );
+  const locationService = fs.readFileSync(
+    path.join(__dirname, '../ios/GuardianCore/GuardianLocationService.swift'),
+    'utf8',
+  );
+  const criticalMessaging = fs.readFileSync(
+    path.join(__dirname, '../ios/GuardianCore/GuardianCriticalMessaging.swift'),
+    'utf8',
+  );
+  assert.doesNotMatch(runtime, /UIApplication\.shared\.open|attemptShortcutNotification/);
+  assert.doesNotMatch(locationService, /onShortcutNotificationRequested/);
+  assert.doesNotMatch(criticalMessaging, /shortcuts:\/\/|GuardianShortcutNotification/);
+  assert.match(criticalMessaging, /shortcutAttemptPending: Bool\? = false/);
+  assert.match(criticalMessaging, /case sending/);
+  assert.match(criticalMessaging, /case retryScheduled/);
+  assert.match(criticalMessaging, /case accepted/);
+  assert.match(criticalMessaging, /case restricted/);
+  assert.match(criticalMessaging, /case expired/);
+  assert.match(criticalMessaging, /case cancelled/);
 });

@@ -26,6 +26,7 @@ const load = createLoader({
       },
     },
     Platform: { OS: 'ios' },
+    Share: { async share() {} },
     Text: 'Text',
     TextInput: 'TextInput',
     TouchableOpacity: 'TouchableOpacity',
@@ -42,6 +43,14 @@ const { RulesScreen } = load('src/screens/RulesScreen.tsx');
 const { PlacesScreen } = load('src/screens/PlacesScreen.tsx');
 const { describeCurrentPlace } = load('src/screens/OverviewScreen.tsx');
 const { MyScreen } = load('src/screens/MyScreen.tsx');
+const {
+  DiagnosticsScreen,
+  buildGuardianDiagnosticReport,
+  buildGuardianDiagnosticSections,
+  buildGuardianLatestRiskTimeline,
+  buildGuardianRecentConfirmation,
+  buildGuardianTodayTimeline,
+} = load('src/screens/DiagnosticsScreen.tsx');
 const { FamilyScreen } = load('src/screens/FamilyScreen.tsx');
 const { getFootprintEvents } = load('src/screens/FootprintsScreen.tsx');
 const {
@@ -335,6 +344,8 @@ test('family form stays collapsed until the add-family action is chosen', async 
         onAddContact() {},
         onInstallShortcut() {},
         onRemoveContact() {},
+        onRequestCriticalMessagingAuthorization() {},
+        onRefreshCriticalMessagingAuthorization() {},
         onSendTestNotification() {},
       }),
     );
@@ -347,6 +358,75 @@ test('family form stays collapsed until the add-family action is chosen', async 
     );
   await act(async () => add.props.onPress());
   assert.equal(renderer.root.findAllByType('TextInput').length, 3);
+  await act(async () => renderer.unmount());
+});
+
+test('family critical messaging shows authorization and latest result per contact', async () => {
+  const createdAt = new Date(now - 60_000).toISOString();
+  const contacts = [
+    { id: 'first', name: '女儿', relation: '女儿', phone: '+8613800000000', priority: 1 },
+    { id: 'second', name: '儿子', relation: '儿子', phone: '+8613900000000', priority: 2 },
+  ];
+  let renderer;
+  await act(async () => {
+    renderer = create(
+      React.createElement(FamilyScreen, {
+        contacts,
+        criticalMessaging: {
+          apiAvailable: true,
+          buildConfigured: true,
+          automaticSendingEnabled: true,
+          requiresBackgroundExecution: true,
+          readiness: 'authorizationDenied',
+          recipients: contacts.map((contact) => ({
+            id: contact.id,
+            name: contact.name,
+            phoneNumber: contact.phone,
+            priority: contact.priority,
+          })),
+          authorizations: [
+            { contactId: 'first', phoneNumber: contacts[0].phone, status: 'approved', checkedAt: createdAt },
+            { contactId: 'second', phoneNumber: contacts[1].phone, status: 'denied', checkedAt: createdAt },
+          ],
+          policy: {
+            validityMinutes: 30,
+            maximumAttempts: 3,
+            retryDelaysSeconds: [60, 300],
+            cooldownMinutes: 10,
+          },
+          operations: [
+            {
+              id: 'risk:first', eventId: 'risk', contactId: 'first', contactName: '女儿',
+              phoneNumber: contacts[0].phone, messageText: '测试', createdAt,
+              status: 'accepted', statusUpdatedAt: createdAt, authorizationStatus: 'approved',
+              attemptCount: 1, expiresAt: new Date(now + 20 * 60_000).toISOString(),
+              acceptedAt: createdAt, shortcutAttemptPending: false,
+            },
+            {
+              id: 'risk:second', eventId: 'risk', contactId: 'second', contactName: '儿子',
+              phoneNumber: contacts[1].phone, messageText: '测试', createdAt,
+              status: 'restricted', statusUpdatedAt: createdAt, authorizationStatus: 'denied',
+              attemptCount: 0, expiresAt: new Date(now + 20 * 60_000).toISOString(),
+              shortcutAttemptPending: false,
+            },
+          ],
+        },
+        onAddContact() {},
+        onInstallShortcut() {},
+        onRemoveContact() {},
+        onRequestCriticalMessagingAuthorization() {},
+        onRefreshCriticalMessagingAuthorization() {},
+        onSendTestNotification() {},
+      }),
+    );
+  });
+  const copy = renderer.root
+    .findAllByType('Text')
+    .map((node) => node.children.join(''))
+    .join('\n');
+  assert.match(copy, /已允许 · 最近：系统已接受/);
+  assert.match(copy, /未允许 · 最近：发送受限/);
+  assert.match(copy, /系统接受发送不代表家人已经阅读/);
   await act(async () => renderer.unmount());
 });
 
@@ -371,6 +451,8 @@ test('My keeps one permission entry and omits duplicate status, reset, and about
         onChangeSchedule() {},
         async onRefreshPermissions() {},
         onRemoveContact() {},
+        async onRequestCriticalMessagingAuthorization() {},
+        async onRefreshCriticalMessagingAuthorization() {},
         async onRequestMotionPermission() {},
         async onRequestPermissions() {},
         async onRetryGeofenceSync() {},
@@ -382,10 +464,143 @@ test('My keeps one permission entry and omits duplicate status, reset, and about
     .map((node) => node.children.join(''))
     .join('\n');
   assert.match(copy, /权限/);
+  assert.match(copy, /守护诊断/);
   assert.doesNotMatch(
     copy,
     /系统权限|正在后台守护|重新开始设置|在后台安静守护|暂停自动守护/,
   );
+  await act(async () => renderer.unmount());
+});
+
+test('guardian diagnostics explain background health without exposing coordinates or phone numbers', async () => {
+  const input = {
+    mode: 'device',
+    now,
+    status: {
+      isGuardianOn: true,
+      isMonitoring: true,
+      isInActiveWindow: true,
+      pendingEventCount: 0,
+      reliability: {
+        lastWakeReason: 'location-event',
+        lastWakeAt: now - 60_000,
+        lastRestoreAt: now - 55_000,
+        lastRestoreSucceeded: true,
+        lastBackgroundCheckAt: now - 120_000,
+        nextBackgroundCheckAt: now + 300_000,
+      },
+    },
+    permissions: {
+      location: 'always',
+      locationAccuracy: 'full',
+      motion: 'authorized',
+      notifications: 'notDetermined',
+      backgroundRefresh: 'available',
+    },
+    geofenceSyncStatus: 'synced',
+    geofenceCount: 2,
+    currentLocationState: 'ready',
+    currentLocation: {
+      latitude: 30.123456,
+      longitude: 120.654321,
+      accuracy: 8,
+      timestamp: new Date(now - 30_000).toISOString(),
+    },
+    currentPlace: { label: '农场', radius: '周围 150 米' },
+    events: [
+      {
+        id: 'risk',
+        type: 'NO_MOTION_FOR_LONG_TIME',
+        title: '在家外长时间没有明显移动',
+        description: '测试风险',
+        timestamp: new Date(now - 90_000).toISOString(),
+        source: 'motion',
+        location: { latitude: 30.123456, longitude: 120.654321, accuracy: 8 },
+      },
+      {
+        id: 'recovery',
+        type: 'MOTION_DETECTED',
+        title: '重新检测到活动',
+        description: '计步器累计新增 5 步。',
+        timestamp: new Date(now - 20_000).toISOString(),
+        source: 'pedometer',
+      },
+    ],
+    criticalMessaging: {
+      apiAvailable: true,
+      buildConfigured: false,
+      automaticSendingEnabled: false,
+      requiresBackgroundExecution: true,
+      readiness: 'buildNotConfigured',
+      recipients: [{ id: 'family', name: '家人', phoneNumber: '18768106491', priority: 1 }],
+      authorizations: [],
+      policy: {
+        validityMinutes: 30,
+        maximumAttempts: 3,
+        retryDelaysSeconds: [60, 300],
+        cooldownMinutes: 10,
+      },
+      operations: [
+        {
+          id: 'message-risk',
+          eventId: 'risk',
+          contactId: 'family',
+          contactName: '家人',
+          phoneNumber: '18768106491',
+          messageText: '测试短信正文',
+          createdAt: new Date(now - 80_000).toISOString(),
+          statusUpdatedAt: new Date(now - 80_000).toISOString(),
+          status: 'prepared',
+          authorizationStatus: 'unknown',
+          attemptCount: 0,
+          expiresAt: new Date(now + 30 * 60_000).toISOString(),
+          shortcutAttemptPending: false,
+          detectionContext: 'background',
+        },
+      ],
+    },
+  };
+  const sections = buildGuardianDiagnosticSections(input);
+  const copy = sections.flatMap((section) => section.rows.map((row) => row.value)).join('\n');
+  assert.match(copy, /定位事件唤醒/);
+  assert.match(copy, /农场/);
+  assert.match(copy, /精度约 8 米/);
+  assert.match(copy, /重新检测到活动/);
+
+  const report = buildGuardianDiagnosticReport(input);
+  assert.match(report, /报告不包含电话号码、短信正文或经纬度/);
+  assert.doesNotMatch(report, /30\.123456|120\.654321|18768106491/);
+
+  const recent = buildGuardianRecentConfirmation(input);
+  assert.equal(recent.title, '重新检测到活动');
+  const today = buildGuardianTodayTimeline(input);
+  assert.ok(today.length > 0);
+  assert.ok(today.every((item, index) => index === 0 || today[index - 1].at >= item.at));
+  const riskTimeline = buildGuardianLatestRiskTimeline(input);
+  assert.deepEqual(
+    riskTimeline.map((item) => item.title),
+    ['在家外长时间没有明显移动', '已准备家人短信', '重新检测到活动'],
+  );
+
+  let renderer;
+  await act(async () => {
+    renderer = create(
+      React.createElement(DiagnosticsScreen, {
+        input,
+        async onRefresh() {},
+      }),
+    );
+  });
+  const screenCopy = renderer.root
+    .findAllByType('Text')
+    .map((node) => node.children.join(''))
+    .join('\n');
+  assert.match(screenCopy, /最近确认/);
+  assert.match(screenCopy, /今天的守护记录/);
+  assert.match(screenCopy, /最近一次风险/);
+  assert.match(screenCopy, /下一次系统机会/);
+  assert.match(screenCopy, /已准备家人短信/);
+  assert.doesNotMatch(screenCopy, /需要处理|守护运行|权限状态/);
   await act(async () => renderer.unmount());
 });
 

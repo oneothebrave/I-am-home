@@ -18,4 +18,4 @@
 
 原型通过显式 `simulate: true` 演练，生成的事件带 `simulated: true`。页面说明不发送真实通知。终态不会反复生成 `ESCALATION_FINISHED`。
 
-Critical Messaging 待发送操作和 API 适配器已接入；entitlement、后台自动发送协调器、送达确认与重试调度尚未启用。
+Critical Messaging API 适配器和后台发送协调器已接入。每位联系人独立持久化授权与发送状态；默认 30 分钟内最多尝试 3 次，失败后分别等待 1 分钟和 5 分钟，同一联系人有 10 分钟冷却。风险解除、操作过期或发送结果未知时不会补发。当前安装包尚无 entitlement 且构建开关关闭，因此只运行到本机准备/受限状态；系统接受也只代表 API 接受请求，不代表送达或阅读。

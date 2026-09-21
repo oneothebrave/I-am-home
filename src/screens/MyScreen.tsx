@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Linking, Text, TouchableOpacity, View } from 'react-native';
 import type { GuardianContact, GuardianEvent, GuardianSchedule } from '../domain/types';
-import type { PermissionState } from '../native/GuardianNative';
+import type { CurrentLocationSample } from '../domain/validation';
+import type { GuardianNativeStatus, PermissionState } from '../native/GuardianNative';
+import type { CriticalMessagingPreparation } from '../native/criticalMessaging';
 import type { GeofenceSyncStatus } from '../native/guardianGeofenceSync';
 import {
   composeShortcutTestMessage,
@@ -9,11 +11,17 @@ import {
   sendShortcutNotification,
 } from '../native/shortcutNotification';
 import { styles } from '../styles/appStyles';
+import {
+  DiagnosticsScreen,
+  guardianDiagnosticsSummary,
+  type DiagnosticCurrentPlace,
+  type GuardianDiagnosticsInput,
+} from './DiagnosticsScreen';
 import { FamilyScreen } from './FamilyScreen';
 import { FootprintsScreen, getFootprintEvents } from './FootprintsScreen';
 import { RulesScreen } from './RulesScreen';
 
-type MySection = 'family' | 'schedule' | 'permissions' | 'footprints' | undefined;
+type MySection = 'family' | 'schedule' | 'permissions' | 'footprints' | 'diagnostics' | undefined;
 
 const permissionLabel: Record<PermissionState['location'], string> = {
   notDetermined: '尚未设置',
@@ -76,30 +84,50 @@ function SettingsRow({
 
 export function MyScreen({
   contacts,
+  criticalMessaging,
+  currentLocation,
+  currentLocationState = 'idle',
+  currentPlace,
+  geofenceCount = 0,
   geofenceSyncStatus,
+  guardianStatus,
   events,
+  mode = 'device',
   now,
   permissions,
   schedule,
   onAddContact,
   onChangeSchedule,
+  onRefreshDiagnostics = async () => undefined,
   onRefreshPermissions,
   onRemoveContact,
+  onRequestCriticalMessagingAuthorization,
+  onRefreshCriticalMessagingAuthorization,
   onRequestMotionPermission,
   onRequestPermissions,
   onRetryGeofenceSync,
   onSectionOpenChange,
 }: {
   contacts: GuardianContact[];
+  criticalMessaging?: CriticalMessagingPreparation;
+  currentLocation?: CurrentLocationSample;
+  currentLocationState?: 'idle' | 'refreshing' | 'ready' | 'error';
+  currentPlace?: DiagnosticCurrentPlace;
+  geofenceCount?: number;
   geofenceSyncStatus: GeofenceSyncStatus;
+  guardianStatus?: GuardianNativeStatus;
   events: GuardianEvent[];
+  mode?: 'demo' | 'device';
   now: number;
   permissions?: PermissionState;
   schedule: GuardianSchedule;
   onAddContact: (contact: GuardianContact) => void;
   onChangeSchedule: (schedule: GuardianSchedule) => void;
+  onRefreshDiagnostics?: () => Promise<void>;
   onRefreshPermissions: () => Promise<void>;
   onRemoveContact: (id: string) => void;
+  onRequestCriticalMessagingAuthorization: () => Promise<void>;
+  onRefreshCriticalMessagingAuthorization: () => Promise<void>;
   onRequestMotionPermission: () => Promise<void>;
   onRequestPermissions: () => Promise<void>;
   onRetryGeofenceSync: () => Promise<void>;
@@ -107,8 +135,24 @@ export function MyScreen({
 }) {
   const [activeSection, setActiveSection] = useState<MySection>();
   const [testNotificationPending, setTestNotificationPending] = useState(false);
+  const [criticalMessagingAuthorizationPending, setCriticalMessagingAuthorizationPending] =
+    useState(false);
   const footprintCount = getFootprintEvents(events).length;
   const firstContact = [...contacts].sort((a, b) => a.priority - b.priority)[0];
+  const diagnosticsInput: GuardianDiagnosticsInput = {
+    mode,
+    now,
+    status: guardianStatus,
+    permissions,
+    geofenceSyncStatus,
+    geofenceCount,
+    currentLocationState,
+    currentLocation,
+    currentPlace,
+    events,
+    criticalMessaging,
+  };
+  const diagnosticsSummary = guardianDiagnosticsSummary(diagnosticsInput);
 
   useEffect(() => {
     onSectionOpenChange?.(Boolean(activeSection));
@@ -122,7 +166,9 @@ export function MyScreen({
         ? '守护时间'
         : activeSection === 'permissions'
           ? '权限'
-          : '足迹';
+          : activeSection === 'footprints'
+            ? '足迹'
+            : '守护诊断';
 
   const showShortcutInstallError = () =>
     Alert.alert(
@@ -169,6 +215,26 @@ export function MyScreen({
     );
   };
 
+  const handleCriticalMessagingAuthorization = async (request: boolean) => {
+    if (criticalMessagingAuthorizationPending) return;
+    setCriticalMessagingAuthorizationPending(true);
+    try {
+      if (request) await onRequestCriticalMessagingAuthorization();
+      else await onRefreshCriticalMessagingAuthorization();
+      Alert.alert(
+        request ? '关键短信授权已更新' : '授权状态已刷新',
+        '每位家人的授权结果已经保存在本机。',
+      );
+    } catch (error) {
+      Alert.alert(
+        '无法更新关键短信授权',
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setCriticalMessagingAuthorizationPending(false);
+    }
+  };
+
   if (activeSection) {
     return (
       <>
@@ -187,14 +253,22 @@ export function MyScreen({
             <View style={styles.noticeCard}>
               <Text style={styles.noticeTitle}>通过快捷指令发短信</Text>
               <Text style={styles.noticeText}>
-                联系方式只在本机保存。App 会把第 1 位家人的手机号和通知内容交给系统快捷指令；检测到家外长时间无活动时也会尝试运行它。
+                联系方式只在本机保存。快捷指令仅用于用户主动发送测试短信；检测到风险时，App 不会自动打开快捷指令。
               </Text>
             </View>
             <FamilyScreen
               contacts={contacts}
+              criticalMessaging={criticalMessaging}
+              criticalMessagingAuthorizationPending={criticalMessagingAuthorizationPending}
               onAddContact={onAddContact}
               onInstallShortcut={() => void handleInstallShortcut()}
               onRemoveContact={onRemoveContact}
+              onRequestCriticalMessagingAuthorization={() =>
+                void handleCriticalMessagingAuthorization(true)
+              }
+              onRefreshCriticalMessagingAuthorization={() =>
+                void handleCriticalMessagingAuthorization(false)
+              }
               onSendTestNotification={confirmTestNotification}
               showNotificationPolicy={false}
               testNotificationPending={testNotificationPending}
@@ -312,6 +386,10 @@ export function MyScreen({
         )}
 
         {activeSection === 'footprints' && <FootprintsScreen events={events} now={now} />}
+
+        {activeSection === 'diagnostics' && (
+          <DiagnosticsScreen input={diagnosticsInput} onRefresh={onRefreshDiagnostics} />
+        )}
       </>
     );
   }
@@ -347,6 +425,11 @@ export function MyScreen({
           label="足迹"
           onPress={() => setActiveSection('footprints')}
           value={footprintCount > 0 ? `${footprintCount} 条` : '暂无记录'}
+        />
+        <SettingsRow
+          label="守护诊断"
+          onPress={() => setActiveSection('diagnostics')}
+          value={diagnosticsSummary.value}
         />
       </View>
 

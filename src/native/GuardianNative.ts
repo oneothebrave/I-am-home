@@ -39,6 +39,8 @@ export type GuardianNativeModule = NativeEventQueue & {
   setActiveWindow: (schedule: GuardianConfig['schedule']) => Promise<void>;
   setNotificationContacts: (contacts: GuardianConfig['contacts']) => Promise<void>;
   getCriticalMessagingPreparation: () => Promise<unknown>;
+  requestCriticalMessagingAuthorization: () => Promise<void>;
+  refreshCriticalMessagingAuthorization: () => Promise<void>;
   getCurrentStatus: () => Promise<GuardianNativeStatus>;
   sendSOS: () => Promise<void>;
 };

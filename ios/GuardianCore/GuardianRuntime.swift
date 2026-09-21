@@ -1,6 +1,5 @@
 import Foundation
 import BackgroundTasks
-import UIKit
 
 private enum GuardianReliabilityDiagnostics {
     private static let wakeAtKey = "GuardianReliability.lastWakeAt"
@@ -55,11 +54,17 @@ private enum GuardianReliabilityDiagnostics {
 }
 
 private final class GuardianBackgroundScheduler {
+    enum Source: Hashable {
+        case guardian
+        case criticalMessaging
+    }
+
     static let shared = GuardianBackgroundScheduler()
     static let identifier = "com.llingrui.iamhome.guardian.refresh"
 
     private var isRegistered = false
     private var scheduledDate: Date?
+    private var requestedDates: [Source: Date] = [:]
 
     func register() {
         guard !isRegistered else { return }
@@ -72,24 +77,26 @@ private final class GuardianBackgroundScheduler {
                 return
             }
             self.scheduledDate = nil
+            self.requestedDates = self.requestedDates.filter { $0.value > Date() }
             GuardianReliabilityDiagnostics.recordNextCheck(nil)
             GuardianRuntime.shared.handleBackgroundRefresh(refreshTask)
         }
     }
 
-    func schedule(at requestedDate: Date?) {
+    func schedule(at requestedDate: Date?, source: Source) {
         precondition(Thread.isMainThread)
-        guard let requestedDate else {
+        requestedDates[source] = requestedDate
+        guard let earliestDate = requestedDates.values.min() else {
             BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.identifier)
             scheduledDate = nil
             GuardianReliabilityDiagnostics.recordNextCheck(nil)
             return
         }
-        if let scheduledDate, scheduledDate <= requestedDate { return }
+        if let scheduledDate, abs(scheduledDate.timeIntervalSince(earliestDate)) < 1 { return }
 
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.identifier)
         let request = BGAppRefreshTaskRequest(identifier: Self.identifier)
-        request.earliestBeginDate = max(requestedDate, Date().addingTimeInterval(5))
+        request.earliestBeginDate = max(earliestDate, Date().addingTimeInterval(5))
         do {
             try BGTaskScheduler.shared.submit(request)
             scheduledDate = request.earliestBeginDate
@@ -107,6 +114,7 @@ final class GuardianRuntime {
     static let shared = GuardianRuntime()
     private(set) var store: GuardianEventStore?
     private(set) var service: GuardianLocationService?
+    private(set) var messagingCoordinator: GuardianCriticalMessagingCoordinator?
     private(set) var lastError: Error?
     private var unsaved: [GuardianEvent] = []
     var onEvent: ((GuardianEvent) -> Void)?
@@ -121,18 +129,24 @@ final class GuardianRuntime {
         do {
             let store = try GuardianEventStore()
             let service = GuardianLocationService(store: store)
+            let messagingCoordinator = GuardianCriticalMessagingCoordinator(store: store)
             self.store = store
             self.service = service
+            self.messagingCoordinator = messagingCoordinator
             self.lastError = nil
             service.onEvent = { [weak self] event in
-                do { try self?.record(event) } catch { self?.report(error) }
+                do {
+                    try self?.record(event)
+                    self?.processCriticalMessages(reason: "guardian-event")
+                } catch { self?.report(error) }
             }
             service.onError = { [weak self] error in self?.report(error) }
             service.onBackgroundCheckNeeded = { date in
-                GuardianBackgroundScheduler.shared.schedule(at: date)
+                GuardianBackgroundScheduler.shared.schedule(at: date, source: .guardian)
             }
-            service.onShortcutNotificationRequested = { [weak self] operation in
-                self?.attemptShortcutNotification(operation)
+            messagingCoordinator.onUpdate = { [weak self] in self?.onMessagingUpdate?() }
+            messagingCoordinator.onNextActionDate = { date in
+                GuardianBackgroundScheduler.shared.schedule(at: date, source: .criticalMessaging)
             }
         } catch { lastError = error }
     }
@@ -180,93 +194,25 @@ final class GuardianRuntime {
         let service = try requireService()
         service.restore(forceMotionHistoryReplay: true) { [weak self] success in
             GuardianReliabilityDiagnostics.recordRestore(success: success)
-            self?.resolveStaleShortcutAttempts()
-            // Restoring the app is not a new notification trigger. Pending operations
-            // remain visible, but are never replayed merely because the user opened it.
+            self?.processCriticalMessages(reason: "restore-\(reason)")
         }
     }
 
-    private func resolveStaleShortcutAttempts(at date: Date = Date()) {
-        guard let store else { return }
-        let stale = store.criticalMessageOperations.filter {
-            $0.shortcutAttemptPending == true &&
-                $0.shortcutOpenSucceeded == nil &&
-                $0.shortcutAttemptedAt.map { date.timeIntervalSince($0) >= 30 } == true
-        }
-        for operation in stale {
-            do {
-                try store.completeShortcutAttempt(
-                    operationId: operation.id,
-                    succeeded: nil,
-                    error: "没有收到 iOS 的打开结果，无法确认快捷指令是否运行。"
-                )
-                onMessagingUpdate?()
-            } catch {
-                report(error)
-            }
+    func processCriticalMessages(reason: String) {
+        guard let messagingCoordinator else { return }
+        Task { @MainActor in
+            await messagingCoordinator.process(reason: reason)
         }
     }
 
-    private func attemptShortcutNotification(_ candidate: GuardianCriticalMessageOperation) {
-        precondition(Thread.isMainThread)
-        do {
-            guard let operation = try requireStore().beginShortcutAttempt(
-                operationId: candidate.id,
-                at: Date()
-            ) else { return }
-            onMessagingUpdate?()
-            guard Date().timeIntervalSince(operation.createdAt) <= 10 * 60 else {
-                try requireStore().completeShortcutAttempt(
-                    operationId: operation.id,
-                    succeeded: false,
-                    error: "异常记录已超过 10 分钟，未再自动打开快捷指令。"
-                )
-                onMessagingUpdate?()
-                return
-            }
-            guard let url = GuardianShortcutNotification.url(for: operation) else {
-                try requireStore().completeShortcutAttempt(
-                    operationId: operation.id,
-                    succeeded: false,
-                    error: "无法生成快捷指令运行地址。"
-                )
-                onMessagingUpdate?()
-                return
-            }
-            let timeout = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                guard self.store?.criticalMessageOperations.first(where: {
-                    $0.id == operation.id
-                })?.shortcutAttemptPending == true else { return }
-                do {
-                    try self.requireStore().completeShortcutAttempt(
-                        operationId: operation.id,
-                        succeeded: nil,
-                        error: "没有收到 iOS 的打开结果，无法确认快捷指令是否运行。"
-                    )
-                    self.onMessagingUpdate?()
-                } catch {
-                    self.report(error)
-                }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: timeout)
-            UIApplication.shared.open(url, options: [:]) { [weak self] succeeded in
-                timeout.cancel()
-                guard let self else { return }
-                do {
-                    try self.requireStore().completeShortcutAttempt(
-                        operationId: operation.id,
-                        succeeded: succeeded,
-                        error: succeeded ? nil : "iOS 未允许打开快捷指令，可能处于锁屏或后台状态。"
-                    )
-                    self.onMessagingUpdate?()
-                } catch {
-                    self.report(error)
-                }
-            }
-        } catch {
-            report(error)
-        }
+    func requestCriticalMessagingAuthorization() async throws {
+        guard let messagingCoordinator else { throw GuardianCoreError.unavailable }
+        try await messagingCoordinator.requestAuthorization()
+    }
+
+    func refreshCriticalMessagingAuthorization() async throws {
+        guard let messagingCoordinator else { throw GuardianCoreError.unavailable }
+        try await messagingCoordinator.refreshAuthorization()
     }
 
     fileprivate func handleBackgroundRefresh(_ task: BGAppRefreshTask) {
@@ -283,7 +229,14 @@ final class GuardianRuntime {
         do {
             try requireService().performReliabilityCheck { success in
                 GuardianReliabilityDiagnostics.recordRestore(success: success)
-                finish(success)
+                guard let coordinator = self.messagingCoordinator else {
+                    finish(success)
+                    return
+                }
+                Task { @MainActor in
+                    await coordinator.process(reason: "background-refresh")
+                    finish(success)
+                }
             }
         } catch {
             report(error)
