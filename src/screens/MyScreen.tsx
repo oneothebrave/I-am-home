@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Alert, Linking, Text, TouchableOpacity, View } from 'react-native';
 import type { GuardianContact, GuardianEvent, GuardianSchedule } from '../domain/types';
 import type { PermissionState } from '../native/GuardianNative';
@@ -36,6 +36,12 @@ const motionLabel: Record<PermissionState['motion'], string> = {
   authorized: '已允许',
 };
 
+const backgroundRefreshLabel: Record<PermissionState['backgroundRefresh'], string> = {
+  available: '已开启',
+  denied: '未开启',
+  restricted: '受系统限制',
+};
+
 const syncLabel: Record<GeofenceSyncStatus, string> = {
   idle: '正在准备',
   syncing: '正在同步',
@@ -70,53 +76,44 @@ function SettingsRow({
 
 export function MyScreen({
   contacts,
-  geofenceCount,
   geofenceSyncStatus,
-  guardianBusy,
-  guardianStatus,
-  isGuardianOn,
-  isGuardianPaused,
   events,
   now,
   permissions,
   schedule,
   onAddContact,
   onChangeSchedule,
-  onPauseGuardian,
   onRefreshPermissions,
   onRemoveContact,
   onRequestMotionPermission,
   onRequestPermissions,
-  onResetLocalState,
-  onResumeGuardian,
   onRetryGeofenceSync,
+  onSectionOpenChange,
 }: {
   contacts: GuardianContact[];
-  geofenceCount: number;
   geofenceSyncStatus: GeofenceSyncStatus;
-  guardianBusy: boolean;
-  guardianStatus: string;
-  isGuardianOn: boolean;
-  isGuardianPaused: boolean;
   events: GuardianEvent[];
   now: number;
   permissions?: PermissionState;
   schedule: GuardianSchedule;
   onAddContact: (contact: GuardianContact) => void;
   onChangeSchedule: (schedule: GuardianSchedule) => void;
-  onPauseGuardian: () => Promise<void>;
   onRefreshPermissions: () => Promise<void>;
   onRemoveContact: (id: string) => void;
   onRequestMotionPermission: () => Promise<void>;
   onRequestPermissions: () => Promise<void>;
-  onResetLocalState: () => Promise<void>;
-  onResumeGuardian: () => Promise<void>;
   onRetryGeofenceSync: () => Promise<void>;
+  onSectionOpenChange?: (open: boolean) => void;
 }) {
   const [activeSection, setActiveSection] = useState<MySection>();
   const [testNotificationPending, setTestNotificationPending] = useState(false);
   const footprintCount = getFootprintEvents(events).length;
   const firstContact = [...contacts].sort((a, b) => a.priority - b.priority)[0];
+
+  useEffect(() => {
+    onSectionOpenChange?.(Boolean(activeSection));
+    return () => onSectionOpenChange?.(false);
+  }, [activeSection, onSectionOpenChange]);
 
   const sectionTitle =
     activeSection === 'family'
@@ -124,20 +121,8 @@ export function MyScreen({
       : activeSection === 'schedule'
         ? '守护时间'
         : activeSection === 'permissions'
-          ? '系统权限'
+          ? '权限'
           : '足迹';
-
-  const confirmPause = () =>
-    Alert.alert('暂停自动守护？', '暂停后，App 不会在后台记录地点变化，直到你再次恢复。', [
-      { text: '取消', style: 'cancel' },
-      { text: '确认暂停', style: 'destructive', onPress: () => void onPauseGuardian() },
-    ]);
-
-  const confirmReset = () =>
-    Alert.alert('重新开始设置？', '这会清除本机保存的地点、家人信息和守护记录。', [
-      { text: '取消', style: 'cancel' },
-      { text: '清除并重新设置', style: 'destructive', onPress: () => void onResetLocalState() },
-    ]);
 
   const showShortcutInstallError = () =>
     Alert.alert(
@@ -158,7 +143,7 @@ export function MyScreen({
 
     Alert.alert(
       '发送测试短信？',
-      `将向第 1 位家人 ${firstContact.name}（${firstContact.phone}）发送一条测试短信。首次运行时，iOS 会要求一次发送权限。`,
+      `将向第 1 位家人 ${firstContact.name}（${firstContact.phone}）发送一条测试短信。修正版快捷指令会直接使用已填写的收件人和内容；首次无交互发送时，如 iOS 显示隐私授权，请选择“始终允许”。`,
       [
         { text: '取消', style: 'cancel' },
         {
@@ -173,7 +158,7 @@ export function MyScreen({
             } catch {
               Alert.alert(
                 '无法运行快捷指令',
-                '请先安装“到家了么通知”快捷指令，然后再试一次。',
+                '请先安装“到家了么短信通知 V3”快捷指令，然后再试一次。',
               );
             } finally {
               setTestNotificationPending(false);
@@ -202,7 +187,7 @@ export function MyScreen({
             <View style={styles.noticeCard}>
               <Text style={styles.noticeTitle}>通过快捷指令发短信</Text>
               <Text style={styles.noticeText}>
-                联系方式只在本机保存。主动测试时，App 会将第 1 位家人的手机号和通知内容交给系统快捷指令；后台异常不会自动打开它。
+                联系方式只在本机保存。App 会把第 1 位家人的手机号和通知内容交给系统快捷指令；检测到家外长时间无活动时也会尝试运行它。
               </Text>
             </View>
             <FamilyScreen
@@ -250,13 +235,22 @@ export function MyScreen({
               </View>
               <View style={styles.permissionDivider} />
               <View style={styles.permissionRow}>
+                <Text style={styles.permissionLabel}>后台 App 刷新</Text>
+                <Text style={styles.permissionValue}>
+                  {permissions
+                    ? backgroundRefreshLabel[permissions.backgroundRefresh]
+                    : '正在读取'}
+                </Text>
+              </View>
+              <View style={styles.permissionDivider} />
+              <View style={styles.permissionRow}>
                 <Text style={styles.permissionLabel}>守护地点</Text>
                 <Text style={styles.permissionValue}>{syncLabel[geofenceSyncStatus]}</Text>
               </View>
             </View>
 
             <Text style={styles.settingHelpText}>
-              自动守护需要“始终允许”和“精确位置”。允许“运动与健身”后，系统会结合步行、跑步和乘车迹象，降低家外停留误判。数据只用于本机守护。
+              自动守护需要“始终允许”“精确位置”和“后台 App 刷新”。允许“运动与健身”后，系统会结合步行、跑步和乘车迹象，降低家外停留误判。数据只用于本机守护。
             </Text>
 
             {(permissions?.location === 'notDetermined' ||
@@ -286,7 +280,8 @@ export function MyScreen({
               permissions?.location === 'restricted' ||
               permissions?.locationAccuracy === 'reduced' ||
               permissions?.motion === 'denied' ||
-              permissions?.motion === 'restricted') && (
+              permissions?.motion === 'restricted' ||
+              permissions?.backgroundRefresh !== 'available') && (
               <TouchableOpacity
                 activeOpacity={0.8}
                 onPress={() => void Linking.openSettings()}
@@ -323,32 +318,6 @@ export function MyScreen({
 
   return (
     <>
-      <Text style={styles.screenTitle}>我的</Text>
-
-      <View style={[styles.guardianSettingCard, isGuardianPaused && styles.guardianSettingPaused]}>
-        <View style={styles.guardianSettingHeader}>
-          <View style={styles.flexItem}>
-            <Text style={styles.guardianSettingLabel}>自动守护</Text>
-            <Text style={styles.guardianSettingTitle}>
-              {isGuardianPaused
-                ? '已暂停'
-                : isGuardianOn
-                  ? '正在后台守护'
-                  : geofenceCount === 0
-                    ? '添加地点后自动开始'
-                    : '正在准备'}
-            </Text>
-          </View>
-          <View
-            style={[
-              styles.guardianStatusDot,
-              isGuardianPaused && styles.guardianStatusDotPaused,
-            ]}
-          />
-        </View>
-        <Text style={styles.guardianSettingDetail}>{guardianStatus}</Text>
-      </View>
-
       <View style={styles.settingsGroup}>
         <SettingsRow
           label="家人联系方式"
@@ -361,15 +330,16 @@ export function MyScreen({
           value={`${schedule.startTime}–${schedule.expectedReturnTime}`}
         />
         <SettingsRow
-          label="系统权限"
+          label="权限"
           onPress={() => setActiveSection('permissions')}
           value={
             permissions?.location === 'always' &&
             permissions.locationAccuracy === 'full' &&
-            permissions.motion === 'authorized'
+            permissions.motion === 'authorized' &&
+            permissions.backgroundRefresh === 'available'
               ? '已就绪'
               : permissions
-                ? permissionLabel[permissions.location]
+                ? '需要设置'
                 : '正在读取'
           }
         />
@@ -380,34 +350,6 @@ export function MyScreen({
         />
       </View>
 
-      {isGuardianPaused ? (
-        <TouchableOpacity
-          activeOpacity={0.8}
-          disabled={guardianBusy}
-          onPress={() => void onResumeGuardian()}
-          style={[styles.primaryButton, guardianBusy && styles.secondaryButtonDisabled]}
-        >
-          <Text style={styles.primaryButtonText}>{guardianBusy ? '正在恢复…' : '恢复自动守护'}</Text>
-        </TouchableOpacity>
-      ) : isGuardianOn ? (
-        <TouchableOpacity
-          activeOpacity={0.8}
-          disabled={guardianBusy}
-          onPress={confirmPause}
-          style={styles.quietButton}
-        >
-          <Text style={styles.quietButtonText}>暂停自动守护</Text>
-        </TouchableOpacity>
-      ) : null}
-
-      <View style={styles.aboutCard}>
-        <Text style={styles.aboutTitle}>到家了么</Text>
-        <Text style={styles.aboutText}>在后台安静守护，只在需要时提醒。</Text>
-      </View>
-
-      <TouchableOpacity activeOpacity={0.8} onPress={confirmReset} style={styles.resetLink}>
-        <Text style={styles.resetLinkText}>重新开始设置</Text>
-      </TouchableOpacity>
     </>
   );
 }

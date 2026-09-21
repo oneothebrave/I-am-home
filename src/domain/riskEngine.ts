@@ -25,7 +25,7 @@ export function buildGuardianSnapshot(
     : isFresh
       ? lastSafeEvent.type === 'RETURN_HOME'
         ? '已经到家'
-        : '最近有平安信号'
+        : '状态正常'
       : '暂时无法确认';
   return {
     status,
@@ -34,10 +34,10 @@ export function buildGuardianSnapshot(
       ? riskReason
       : isFresh
         ? lastSafeEvent.description
-        : '尚无近期可信信号，建议家人主动联系。',
+        : '暂时没有可用的位置或活动记录。',
     lastSafeSignal: lastSafeEvent
       ? `${formatEventTime(lastSafeEvent.timestamp, now)} ${lastSafeEvent.title}`
-      : '暂无可信信号',
+      : '暂无记录',
     locationLabel: projection.locationLabel,
     batteryLevel: projection.batteryLevel,
     riskReason,

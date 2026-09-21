@@ -26,6 +26,7 @@ export function FamilyScreen({
   const [name, setName] = useState('');
   const [relation, setRelation] = useState('');
   const [phone, setPhone] = useState('');
+  const [isAddingContact, setIsAddingContact] = useState(false);
   const canAddMore = contacts.length < 3;
   const [error, setError] = useState('');
   const firstContact = [...contacts].sort((a, b) => a.priority - b.priority)[0];
@@ -54,11 +55,23 @@ export function FamilyScreen({
     setName('');
     setRelation('');
     setPhone('');
+    setIsAddingContact(false);
+  };
+
+  const cancelAddingContact = () => {
+    setName('');
+    setRelation('');
+    setPhone('');
+    setError('');
+    setIsAddingContact(false);
   };
 
   return (
     <>
       <Section title="家人名单">
+        {contacts.length === 0 && (
+          <Text style={styles.emptyListText}>还没有家人信息。</Text>
+        )}
         {contacts.map((contact) => (
           <View style={styles.contactRow} key={contact.id}>
             <View style={styles.flexItem}>
@@ -77,47 +90,68 @@ export function FamilyScreen({
             </TouchableOpacity>
           </View>
         ))}
+        {canAddMore && !isAddingContact && (
+          <TouchableOpacity
+            accessibilityRole="button"
+            activeOpacity={0.8}
+            onPress={() => {
+              setError('');
+              setIsAddingContact(true);
+            }}
+            style={styles.secondaryOutlineButton}
+          >
+            <Text style={styles.secondaryOutlineButtonText}>增加家人信息</Text>
+          </TouchableOpacity>
+        )}
       </Section>
 
-      <Section title="新增家人">
-        {!!error && (
-          <Text accessibilityRole="alert" style={styles.errorText}>
-            {error}
-          </Text>
-        )}
-        <TextInput
-          onChangeText={setName}
-          placeholder="姓名"
-          placeholderTextColor="#9A9387"
-          style={styles.input}
-          value={name}
-        />
-        <TextInput
-          onChangeText={setRelation}
-          placeholder="关系"
-          placeholderTextColor="#9A9387"
-          style={styles.input}
-          value={relation}
-        />
-        <TextInput
-          keyboardType="phone-pad"
-          onChangeText={setPhone}
-          placeholder="手机号"
-          placeholderTextColor="#9A9387"
-          style={styles.input}
-          value={phone}
-        />
-        <TouchableOpacity
-          activeOpacity={0.8}
-          disabled={!canAddMore}
-          onPress={handleAddContact}
-          style={[styles.secondaryButton, !canAddMore && styles.secondaryButtonDisabled]}
-        >
-          <Text style={styles.secondaryButtonText}>
-            {canAddMore ? '保存家人信息' : '最多保存 3 位家人'}
-          </Text>
-        </TouchableOpacity>
-      </Section>
+      {isAddingContact && (
+        <Section title="增加家人信息">
+          {!!error && (
+            <Text accessibilityRole="alert" style={styles.errorText}>
+              {error}
+            </Text>
+          )}
+          <TextInput
+            autoFocus
+            onChangeText={setName}
+            placeholder="姓名"
+            placeholderTextColor="#9A9387"
+            style={styles.input}
+            value={name}
+          />
+          <TextInput
+            onChangeText={setRelation}
+            placeholder="关系"
+            placeholderTextColor="#9A9387"
+            style={styles.input}
+            value={relation}
+          />
+          <TextInput
+            keyboardType="phone-pad"
+            onChangeText={setPhone}
+            placeholder="手机号"
+            placeholderTextColor="#9A9387"
+            style={styles.input}
+            value={phone}
+          />
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={handleAddContact}
+            style={styles.secondaryButton}
+          >
+            <Text style={styles.secondaryButtonText}>保存家人信息</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            accessibilityRole="button"
+            activeOpacity={0.8}
+            onPress={cancelAddingContact}
+            style={styles.formCancelLink}
+          >
+            <Text style={styles.formCancelLinkText}>取消</Text>
+          </TouchableOpacity>
+        </Section>
+      )}
 
       <Section title="短信快捷指令">
         <Text style={styles.settingHelpText}>
@@ -125,7 +159,7 @@ export function FamilyScreen({
         </Text>
 
         <Text style={styles.shortcutInstallText}>
-          安装时无需再选择通讯录联系人。发送时会自动使用 App 中保存的第 1 位家人手机号。
+          直发版使用唯一名称，并明确接收 App 传入的快捷指令输入。它已关闭“显示编写表单”，会自动使用 App 中保存的第 1 位家人手机号和通知内容。
         </Text>
 
         <TouchableOpacity
@@ -134,7 +168,7 @@ export function FamilyScreen({
           onPress={onInstallShortcut}
           style={styles.secondaryOutlineButton}
         >
-          <Text style={styles.secondaryOutlineButtonText}>安装短信快捷指令</Text>
+          <Text style={styles.secondaryOutlineButtonText}>安装短信快捷指令直发版</Text>
         </TouchableOpacity>
         <TouchableOpacity
           accessibilityRole="button"
@@ -151,7 +185,7 @@ export function FamilyScreen({
           </Text>
         </TouchableOpacity>
         <Text style={styles.shortcutFootnote}>
-          当前只用于前台主动测试，后台检测不会自动打开快捷指令。首次测试时，iOS 会要求发送信息权限；如果出现“始终允许”，请选择它。发送使用第 1 位家人，可能产生短信费用。
+          新版名称为“到家了么短信通知 V3”，旧快捷指令可以保留，App 不会再调用它。前台可以主动测试；检测到家外长时间无活动时，App 也会尝试运行新版。锁屏或后台时 iOS 仍可能拒绝打开。首次无交互发送时，如果 iOS 显示“始终允许”，请选择它。可能产生短信费用。
         </Text>
       </Section>
 

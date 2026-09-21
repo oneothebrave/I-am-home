@@ -6,6 +6,7 @@ const { buildGuardianSnapshot } = load('src/domain/riskEngine.ts');
 const { getEscalationState } = load('src/domain/escalation.ts');
 const { guardianConfig: config, createDemoEvents } = load('src/domain/mockData.ts');
 const { summarizeRiskReason } = load('src/domain/guardianRules.ts');
+const { isWithinGuardianWindow } = load('src/domain/guardianSchedule.ts');
 const now = Date.parse('2026-09-08T08:30:00Z');
 const event = (type, index, fields = {}) => ({
   id: `e${index}`,
@@ -22,6 +23,14 @@ const notified = event('FAMILY_NOTIFIED', 3, { incidentId: risk.id, contactId: '
 const snapshot = (events) => buildGuardianSnapshot(events, { now });
 const escalation = (events, cfg = config, options = {}) =>
   getEscalationState(snapshot(events), cfg, { now, simulate: true, ...options });
+
+test('single guardian window includes its start and excludes its end', () => {
+  const schedule = config.schedule;
+  assert.equal(isWithinGuardianWindow(schedule, new Date(2026, 8, 21, 6, 59)), false);
+  assert.equal(isWithinGuardianWindow(schedule, new Date(2026, 8, 21, 7, 0)), true);
+  assert.equal(isWithinGuardianWindow(schedule, new Date(2026, 8, 21, 17, 59)), true);
+  assert.equal(isWithinGuardianWindow(schedule, new Date(2026, 8, 21, 18, 0)), false);
+});
 
 test('demo starts with attention; empty and stale signals remain unknown', () => {
   assert.equal(snapshot(createDemoEvents(now)).status, 'attention');
@@ -121,12 +130,11 @@ test('failed delivery retries the same contact; acknowledgement preserves the al
   assert.equal(escalation(events).phase, 'acknowledged');
   assert.equal(snapshot(events).status, 'emergency');
 });
-test('live escalation respects deadlines and does not fabricate sent events', () => {
+test('live family queue has no self-confirmation escalation delay and fabricates no sent events', () => {
   assert.equal(escalation([risk], config, { simulate: false }).phase, 'family_queue');
-  assert.equal(escalation([risk, notified], config, { simulate: false }).phase, 'waiting');
-  const late = getEscalationState(snapshot([risk, notified]), config, { now: now + 600_000 });
-  assert.equal(late.phase, 'family_queue');
-  assert.equal(late.nextEvent, undefined);
+  const next = escalation([risk, notified], config, { simulate: false });
+  assert.equal(next.phase, 'family_queue');
+  assert.equal(next.nextEvent, undefined);
 });
 test('no-motion risk goes directly to the family queue without a self prompt', () => {
   const noMotion = event('NO_MOTION_FOR_LONG_TIME', 1, { source: 'motion' });

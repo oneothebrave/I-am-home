@@ -7,7 +7,6 @@ import type {
 
 export type EscalationPhase =
   | 'idle'
-  | 'waiting'
   | 'family_queue'
   | 'blocked'
   | 'completed'
@@ -78,17 +77,7 @@ export function getEscalationState(
           }),
     };
   }
-  const anchor = incident.lastNotificationAt;
-  const due = anchor ? Date.parse(anchor) + config.schedule.escalationDelayMinutes * 60_000 : now;
-  if (!simulate && now < due)
-    return {
-      ...common,
-      phase: 'waiting',
-      title: '等待响应',
-      description: '确认期限未到。',
-      nextContact,
-      dueAt: new Date(due).toISOString(),
-    };
+  const due = now;
   return {
     ...common,
     phase: 'family_queue',

@@ -8,6 +8,7 @@ const { startGuardianEventSync } = load('src/native/guardianEventSync.ts');
 const { startGuardianGeofenceSync } = load('src/native/guardianGeofenceSync.ts');
 const { startGuardianControl } = load('src/native/guardianControl.ts');
 const { parseCurrentLocationSample } = load('src/domain/validation.ts');
+const { parseCriticalMessagingPreparation } = load('src/native/criticalMessaging.ts');
 const { createGuardianStore } = load('src/state/guardianStore.ts');
 const { createGuardianRepository } = load('src/storage/guardianRepository.ts');
 const { createInitialStoredState } = load('src/storage/guardianSchema.ts');
@@ -430,6 +431,7 @@ test('bridge export declarations match the TS queue and permission contract (sta
     'acknowledgeEvents',
     'getCurrentStatus',
     'getCurrentLocation',
+    'pickTime',
     'getPermissions',
     'requestPermissions',
     'requestMotionPermission',
@@ -437,9 +439,59 @@ test('bridge export declarations match the TS queue and permission contract (sta
     'stopGuardian',
     'setGeofences',
     'setNoMotionThresholdMinutes',
+    'setActiveWindow',
+    'setNotificationContacts',
+    'getCriticalMessagingPreparation',
     'sendSOS',
   ]) {
     assert.ok(swift.includes(`func ${method}(`));
     assert.ok(objc.includes(`RCT_EXTERN_METHOD(${method}:`));
   }
+});
+
+test('iOS registers and permits the local reliability refresh task before restore', () => {
+  const plist = fs.readFileSync(
+    path.join(__dirname, '../ios/DaojiaShuoYisheng/Info.plist'),
+    'utf8',
+  );
+  const appDelegate = fs.readFileSync(
+    path.join(__dirname, '../ios/DaojiaShuoYisheng/AppDelegate.swift'),
+    'utf8',
+  );
+  assert.match(plist, /BGTaskSchedulerPermittedIdentifiers/);
+  assert.match(plist, /com\.llingrui\.iamhome\.guardian\.refresh/);
+  assert.match(plist, /<string>fetch<\/string>/);
+  assert.match(plist, /<string>location<\/string>/);
+  assert.ok(
+    appDelegate.indexOf('GuardianBootstrap.registerBackgroundTasks()') <
+      appDelegate.indexOf('GuardianBootstrap.restore('),
+  );
+  assert.match(appDelegate, /applicationProtectedDataDidBecomeAvailable/);
+});
+
+test('critical messaging preparation validates recipients and pending operations', () => {
+  const value = parseCriticalMessagingPreparation({
+    apiAvailable: true,
+    buildConfigured: false,
+    recipients: [{ id: 'family-1', name: '小林', phoneNumber: '+8613800000000', priority: 1 }],
+    operations: [
+      {
+        id: 'risk-1:family-1',
+        eventId: 'risk-1',
+        contactId: 'family-1',
+        contactName: '小林',
+        phoneNumber: '+8613800000000',
+        messageText: '测试待发送内容',
+        createdAt: '2026-09-21T01:00:00.000Z',
+        status: 'prepared',
+        shortcutAttemptPending: false,
+      },
+    ],
+  });
+  assert.equal(value.operations[0].status, 'prepared');
+  assert.equal(value.recipients[0].name, '小林');
+  assert.throws(
+    () => parseCriticalMessagingPreparation({ ...value, operations: [{}] }),
+    /格式无效/,
+  );
 });

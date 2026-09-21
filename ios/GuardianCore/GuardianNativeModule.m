@@ -18,6 +18,11 @@ RCT_EXTERN_METHOD(getCurrentStatus:(RCTPromiseResolveBlock)resolve
 RCT_EXTERN_METHOD(getCurrentLocation:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(pickTime:(NSString *)initialTime
+                  title:(NSString *)title
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(getPendingEvents:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
@@ -38,6 +43,17 @@ RCT_EXTERN_METHOD(setGeofences:(NSArray *)rawGeofences
 
 RCT_EXTERN_METHOD(setNoMotionThresholdMinutes:(nonnull NSNumber *)value
                   resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(setActiveWindow:(NSDictionary *)schedule
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(setNotificationContacts:(NSArray *)rawContacts
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(getCriticalMessagingPreparation:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(sendSOS:(RCTPromiseResolveBlock)resolve

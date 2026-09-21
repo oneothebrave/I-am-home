@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   AppState,
   SafeAreaView,
   ScrollView,
@@ -9,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { getStatusTone } from './src/domain/guardianRules';
+import { isWithinGuardianWindow } from './src/domain/guardianSchedule';
 import { buildGuardianSnapshot } from './src/domain/riskEngine';
 import {
   parseCurrentLocationSample,
@@ -18,6 +20,7 @@ import {
   getGuardianNative,
   subscribeToGuardianErrors,
   subscribeToGuardianEvents,
+  subscribeToGuardianMessagingUpdates,
   type PermissionState,
 } from './src/native/GuardianNative';
 import {
@@ -25,6 +28,10 @@ import {
   type GuardianControlState,
 } from './src/native/guardianControl';
 import { startGuardianEventSync } from './src/native/guardianEventSync';
+import {
+  parseCriticalMessagingPreparation,
+  type CriticalMessagingPreparation,
+} from './src/native/criticalMessaging';
 import {
   startGuardianGeofenceSync,
   type GeofenceSyncStatus,
@@ -52,6 +59,8 @@ function describeDeviceGuardian(
   geofenceSyncStatus: GeofenceSyncStatus,
   geofenceCount: number,
   hasHomeGeofence: boolean,
+  isInActiveWindow: boolean,
+  activeWindowLabel: string,
   isPaused: boolean,
 ) {
   if (isPaused) return '已由你暂停；恢复后会继续在后台守护。';
@@ -63,14 +72,18 @@ function describeDeviceGuardian(
   if (control.phase === 'error') return `守护遇到问题：${control.error ?? '请重试'}`;
   if (permissions.location !== 'always') return '需要把定位权限设为“始终允许”。';
   if (permissions.locationAccuracy !== 'full') return '需要在系统设置中开启精确位置。';
+  if (permissions.backgroundRefresh !== 'available')
+    return '需要开启“后台 App 刷新”，否则 iOS 无法在 App 未运行时恢复守护。';
   if (geofenceSyncStatus === 'error') return '守护地点同步失败，请重试。';
   if (geofenceSyncStatus !== 'synced') return '正在准备守护地点。';
   if (control.nativeStatus?.isGuardianOn && control.nativeStatus.isMonitoring) {
     if (!hasHomeGeofence)
-      return '后台守护中；设置一个“家”地点后，才会启用家外长时间停留判断。';
+      return '设置一个“家”地点后，才会启用家外长时间停留判断。';
+    if (!isInActiveWindow)
+      return `地点守护仍在运行；当前不在 ${activeWindowLabel} 守护时段，家外无活动判断已暂停。`;
     if (permissions.motion !== 'authorized')
-      return '后台守护中；允许“运动与健身”后，家外停留判断会更可靠。';
-    return '后台守护中，无需保持 App 打开。';
+      return '允许“运动与健身”后，家外停留判断会更可靠。';
+    return '';
   }
   if (control.nativeStatus?.isGuardianOn) return '守护已开启，正在恢复后台运行。';
   return '准备完成，正在自动启动守护。';
@@ -86,10 +99,18 @@ function App(): React.JSX.Element {
     phase: 'unknown',
   });
   const [guardianTogglePending, setGuardianTogglePending] = useState(false);
+  const [isMySubviewOpen, setIsMySubviewOpen] = useState(false);
+  const [criticalMessaging, setCriticalMessaging] = useState<CriticalMessagingPreparation>();
+  const [currentLocation, setCurrentLocation] = useState<CurrentLocationSample>();
+  const [currentLocationState, setCurrentLocationState] = useState<
+    'idle' | 'refreshing' | 'ready' | 'error'
+  >('idle');
   const nativeSync = useRef<ReturnType<typeof startGuardianEventSync> | undefined>(undefined);
   const geofenceSync = useRef<ReturnType<typeof startGuardianGeofenceSync> | undefined>(undefined);
   const guardianControl = useRef<ReturnType<typeof startGuardianControl> | undefined>(undefined);
   const guardianToggleLock = useRef(false);
+  const motionPermissionRequested = useRef(false);
+  const currentLocationRequest = useRef<Promise<CurrentLocationSample> | undefined>(undefined);
   const state = useGuardian(store);
   const { config, isGuardianOn, isGuardianPaused, localEvents, mode } = state.data;
   const isHydrated = state.loadStatus === 'ready';
@@ -104,13 +125,53 @@ function App(): React.JSX.Element {
     }
   };
 
+  const refreshCriticalMessaging = async () => {
+    try {
+      const preparation = parseCriticalMessagingPreparation(
+        await getGuardianNative().getCriticalMessagingPreparation(),
+      );
+      setCriticalMessaging(preparation);
+    } catch (error) {
+      setNativeError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const requestFreshCurrentLocation = () => {
+    if (currentLocationRequest.current) return currentLocationRequest.current;
+    const request = getGuardianNative().getCurrentLocation().then(parseCurrentLocationSample);
+    currentLocationRequest.current = request;
+    const clear = () => {
+      if (currentLocationRequest.current === request) currentLocationRequest.current = undefined;
+    };
+    request.then(clear, clear);
+    return request;
+  };
+
+  const refreshCurrentPlace = async (
+    eventSync = nativeSync.current,
+  ) => {
+    setCurrentLocationState('refreshing');
+    try {
+      const sample = await requestFreshCurrentLocation();
+      setCurrentLocation(sample);
+      setCurrentLocationState('ready');
+      await eventSync?.retry();
+    } catch {
+      setCurrentLocationState('error');
+    }
+  };
+
   useEffect(() => {
     if (!isHydrated || mode !== 'device') return;
     try {
       const native = getGuardianNative();
       const eventSync = startGuardianEventSync(
         native,
-        subscribeToGuardianEvents,
+        (listener) =>
+          subscribeToGuardianEvents(() => {
+            listener();
+            void refreshCriticalMessaging();
+          }),
         store.importEvents,
         (error) => setNativeError(String(error)),
       );
@@ -130,15 +191,22 @@ function App(): React.JSX.Element {
       guardianControl.current = control;
       fenceSync.update(store.getSnapshot().data.config.geofences);
       void refreshPermissions();
+      void refreshCriticalMessaging();
+      void refreshCurrentPlace(eventSync);
       void control.refresh().catch(() => undefined);
       const removeErrors = subscribeToGuardianErrors((event) => {
         setNativeError(event.message);
         void control.refresh().catch(() => undefined);
       });
+      const removeMessagingUpdates = subscribeToGuardianMessagingUpdates(() => {
+        void refreshCriticalMessaging();
+      });
       const appState = AppState.addEventListener('change', (value) => {
         if (value === 'active') {
           void eventSync.retry();
           void refreshPermissions();
+          void refreshCriticalMessaging();
+          void refreshCurrentPlace(eventSync);
           void control.refresh().catch(() => undefined);
         }
       });
@@ -147,6 +215,7 @@ function App(): React.JSX.Element {
         fenceSync.stop();
         control.stop();
         removeErrors();
+        removeMessagingUpdates();
         appState.remove();
         nativeSync.current = undefined;
         geofenceSync.current = undefined;
@@ -171,6 +240,34 @@ function App(): React.JSX.Element {
   }, [config.schedule.noMotionThresholdMinutes, isHydrated, mode]);
 
   useEffect(() => {
+    if (!isHydrated || mode !== 'device') return;
+    void getGuardianNative()
+      .setActiveWindow(config.schedule)
+      .then(() => guardianControl.current?.refresh())
+      .catch((error) => setNativeError(error instanceof Error ? error.message : String(error)));
+  }, [config.schedule.expectedReturnTime, config.schedule.startTime, isHydrated, mode]);
+
+  useEffect(() => {
+    if (!isHydrated || mode !== 'device') return;
+    void getGuardianNative()
+      .setNotificationContacts(config.contacts)
+      .then(refreshCriticalMessaging)
+      .catch((error) => setNativeError(error instanceof Error ? error.message : String(error)));
+  }, [config.contacts, isHydrated, mode]);
+
+  useEffect(() => {
+    if (
+      !isHydrated ||
+      mode !== 'device' ||
+      permissions?.motion !== 'notDetermined' ||
+      motionPermissionRequested.current
+    )
+      return;
+    motionPermissionRequested.current = true;
+    void requestMotionPermission();
+  }, [isHydrated, mode, permissions?.motion]);
+
+  useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, []);
@@ -192,14 +289,19 @@ function App(): React.JSX.Element {
         geofenceSyncStatus,
         config.geofences.length,
         hasHomeGeofence,
+        isWithinGuardianWindow(config.schedule, new Date(now)),
+        `${config.schedule.startTime}–${config.schedule.expectedReturnTime}`,
         isGuardianPaused,
       ),
     [
       config.geofences.length,
+      config.schedule.expectedReturnTime,
+      config.schedule.startTime,
       geofenceSyncStatus,
       guardianControlState,
       hasHomeGeofence,
       isGuardianPaused,
+      now,
       permissions,
     ],
   );
@@ -222,7 +324,11 @@ function App(): React.JSX.Element {
         await new Promise<void>((resolve) => setTimeout(resolve, 500));
         const next = await native.getPermissions();
         setPermissions(next);
-        if (next.location !== before) return;
+        if (next.location !== before) {
+          if (next.location === 'always' && next.locationAccuracy === 'full')
+            void refreshCurrentPlace();
+          return;
+        }
       }
       setNativeError('定位权限尚未改变；如果系统没有再次弹窗，请打开系统设置。');
     } catch (error) {
@@ -251,7 +357,10 @@ function App(): React.JSX.Element {
     const current = store.getSnapshot();
     if (current.loadStatus !== 'ready' || current.data.mode !== 'device')
       throw new Error('真实设备模式尚未就绪。');
-    return parseCurrentLocationSample(await getGuardianNative().getCurrentLocation());
+    const sample = await requestFreshCurrentLocation();
+    setCurrentLocation(sample);
+    setCurrentLocationState('ready');
+    return sample;
   };
 
   const saveCurrentLocation = async (
@@ -386,6 +495,12 @@ function App(): React.JSX.Element {
     await setGuardianEnabled(true);
   };
 
+  const confirmPauseGuardian = () =>
+    Alert.alert('暂停自动守护？', '暂停后，App 不会在后台记录地点变化，直到你再次恢复。', [
+      { text: '取消', style: 'cancel' },
+      { text: '确认暂停', style: 'destructive', onPress: () => void pauseGuardian() },
+    ]);
+
   useEffect(() => {
     if (
       !isHydrated ||
@@ -430,34 +545,6 @@ function App(): React.JSX.Element {
     mode,
   ]);
 
-  const resetLocalState = async () => {
-    if (mode !== 'device') {
-      store.reset();
-      return;
-    }
-    const control = guardianControl.current;
-    if (!control || guardianToggleLock.current) {
-      setNativeError('设备守护状态尚未就绪，未清除数据。');
-      return;
-    }
-    guardianToggleLock.current = true;
-    setGuardianTogglePending(true);
-    try {
-      await control.setEnabled(false, store.getSnapshot().data.config);
-      store.reset();
-      await store.flush();
-      setNativeError('');
-      setActiveTab('places');
-    } catch (error) {
-      setNativeError(`停止守护失败，未清除数据：${
-        error instanceof Error ? error.message : String(error)
-      }`);
-    } finally {
-      guardianToggleLock.current = false;
-      setGuardianTogglePending(false);
-    }
-  };
-
   const guardianBusy =
     guardianTogglePending ||
     ['unknown', 'checking', 'starting', 'stopping'].includes(guardianControlState.phase);
@@ -492,6 +579,10 @@ function App(): React.JSX.Element {
 
           {activeTab === 'status' && (
             <OverviewScreen
+              criticalMessaging={criticalMessaging}
+              currentLocation={currentLocation}
+              currentLocationState={currentLocationState}
+              geofences={config.geofences}
               guardianReady={overviewGuardianReady}
               guardianStatus={
                 mode === 'demo' ? '当前是演示状态，不会发送真实通知。' : deviceGuardianDescription
@@ -540,12 +631,7 @@ function App(): React.JSX.Element {
           {isHydrated && activeTab === 'me' && (
             <MyScreen
               contacts={config.contacts}
-              geofenceCount={config.geofences.length}
               geofenceSyncStatus={geofenceSyncStatus}
-              guardianBusy={guardianBusy}
-              guardianStatus={deviceGuardianDescription}
-              isGuardianOn={isGuardianOn}
-              isGuardianPaused={isGuardianPaused}
               events={snapshot.events}
               now={now}
               permissions={permissions}
@@ -562,7 +648,6 @@ function App(): React.JSX.Element {
               onChangeSchedule={(schedule) => {
                 store.updateConfig((current) => ({ ...current, schedule }));
               }}
-              onPauseGuardian={pauseGuardian}
               onRefreshPermissions={async () => {
                 setNativeError('');
                 await refreshPermissions();
@@ -578,12 +663,39 @@ function App(): React.JSX.Element {
               }}
               onRequestMotionPermission={requestMotionPermission}
               onRequestPermissions={requestLocationPermissions}
-              onResetLocalState={resetLocalState}
-              onResumeGuardian={resumeGuardian}
               onRetryGeofenceSync={retryGeofenceSync}
+              onSectionOpenChange={setIsMySubviewOpen}
             />
           )}
         </ScrollView>
+
+        {isHydrated && activeTab === 'me' && !isMySubviewOpen && (isGuardianPaused || isGuardianOn) && (
+          <View style={styles.myGuardianFooter}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              activeOpacity={0.65}
+              disabled={guardianBusy}
+              onPress={isGuardianPaused ? () => void resumeGuardian() : confirmPauseGuardian}
+              style={styles.myGuardianTextAction}
+            >
+              <Text
+                style={[
+                  styles.myGuardianText,
+                  isGuardianPaused && styles.myGuardianResumeText,
+                  guardianBusy && styles.myGuardianTextDisabled,
+                ]}
+              >
+                {guardianBusy
+                  ? isGuardianPaused
+                    ? '正在恢复…'
+                    : '正在暂停…'
+                  : isGuardianPaused
+                    ? '恢复自动守护'
+                    : '暂停自动守护'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         <View style={styles.tabBar}>
           {tabs.map((tab) => (
@@ -593,7 +705,10 @@ function App(): React.JSX.Element {
               activeOpacity={0.75}
               disabled={!isHydrated && tab.key !== 'status'}
               key={tab.key}
-              onPress={() => setActiveTab(tab.key)}
+              onPress={() => {
+                if (tab.key !== 'me') setIsMySubviewOpen(false);
+                setActiveTab(tab.key);
+              }}
               style={styles.tabButton}
             >
               <View style={[styles.tabDot, activeTab === tab.key && styles.tabDotActive]} />

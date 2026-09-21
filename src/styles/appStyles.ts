@@ -328,6 +328,33 @@ export const styles = StyleSheet.create({
     marginBottom: 8,
     marginTop: 4,
   },
+  timePickerRow: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E4DED2',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    minHeight: 58,
+    paddingHorizontal: 14,
+  },
+  timePickerLabel: {
+    color: '#24211D',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  timePickerValueGroup: {
+    alignItems: 'center',
+    flexDirection: 'row',
+  },
+  timePickerValue: {
+    color: '#235D4C',
+    fontSize: 17,
+    fontVariant: ['tabular-nums'],
+    fontWeight: '700',
+  },
   segmentRow: {
     flexDirection: 'row',
     gap: 8,
@@ -394,6 +421,22 @@ export const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '800',
+  },
+  emptyListText: {
+    color: '#777065',
+    fontSize: 15,
+    lineHeight: 22,
+    marginBottom: 2,
+  },
+  formCancelLink: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+  },
+  formCancelLinkText: {
+    color: '#6D665C',
+    fontSize: 16,
+    fontWeight: '700',
   },
   exerciseRow: {
     flexDirection: 'row',
@@ -485,7 +528,6 @@ export const styles = StyleSheet.create({
     color: '#1F211D',
     fontSize: 30,
     fontWeight: '800',
-    marginBottom: 18,
   },
   errorBanner: {
     backgroundColor: '#F7E3DE',
@@ -610,6 +652,12 @@ export const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     marginTop: 5,
+  },
+  noticeFootnote: {
+    color: '#81796E',
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 10,
   },
   sectionHeaderRow: {
     marginTop: 28,
@@ -1073,45 +1121,6 @@ export const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
   },
-  guardianSettingCard: {
-    backgroundColor: '#E6F0EA',
-    borderRadius: 20,
-    padding: 20,
-  },
-  guardianSettingPaused: {
-    backgroundColor: '#EEE8DF',
-  },
-  guardianSettingHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-  },
-  guardianSettingLabel: {
-    color: '#537166',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  guardianSettingTitle: {
-    color: '#234E40',
-    fontSize: 24,
-    fontWeight: '800',
-    marginTop: 6,
-  },
-  guardianSettingDetail: {
-    color: '#52685F',
-    fontSize: 15,
-    lineHeight: 22,
-    marginTop: 12,
-  },
-  guardianStatusDot: {
-    backgroundColor: '#3E806A',
-    borderRadius: 7,
-    height: 14,
-    marginLeft: 12,
-    width: 14,
-  },
-  guardianStatusDotPaused: {
-    backgroundColor: '#A79F93',
-  },
   settingsGroup: {
     backgroundColor: '#FFFDF9',
     borderColor: '#E4DDD2',
@@ -1147,43 +1156,27 @@ export const styles = StyleSheet.create({
     fontSize: 26,
     marginLeft: 8,
   },
-  quietButton: {
+  myGuardianFooter: {
     alignItems: 'center',
-    borderColor: '#D7CFC3',
-    borderRadius: 14,
-    borderWidth: 1,
-    justifyContent: 'center',
-    marginTop: 18,
-    minHeight: 52,
+    backgroundColor: '#F7F4ED',
+    paddingHorizontal: 20,
+    paddingVertical: 4,
   },
-  quietButtonText: {
-    color: '#6D665C',
+  myGuardianTextAction: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+    paddingHorizontal: 16,
+  },
+  myGuardianText: {
+    color: '#8A2E22',
     fontSize: 16,
     fontWeight: '700',
   },
-  aboutCard: {
-    marginTop: 28,
-    paddingVertical: 8,
+  myGuardianResumeText: {
+    color: '#235D4C',
   },
-  aboutTitle: {
-    color: '#49443C',
-    fontSize: 17,
-    fontWeight: '800',
-  },
-  aboutText: {
-    color: '#7A7368',
-    fontSize: 14,
-    lineHeight: 21,
-    marginTop: 5,
-  },
-  resetLink: {
-    alignItems: 'center',
-    marginTop: 18,
-    minHeight: 46,
-    padding: 12,
-  },
-  resetLinkText: {
-    color: '#9A5348',
-    fontSize: 14,
+  myGuardianTextDisabled: {
+    opacity: 0.5,
   },
 });

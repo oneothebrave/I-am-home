@@ -21,12 +21,14 @@
 		A10000000000000000000007 /* GuardianNativeModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* GuardianNativeModule.swift */; };
 		A10000000000000000000008 /* GuardianNativeModule.m in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* GuardianNativeModule.m */; };
 		A10000000000000000000009 /* GuardianInactivityDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* GuardianInactivityDetector.swift */; };
+		A1000000000000000000000A /* GuardianCriticalMessaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* GuardianCriticalMessaging.swift */; };
 		A10000000000000000000011 /* GuardianEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* GuardianEvent.swift */; };
 		A10000000000000000000012 /* GuardianEventStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* GuardianEventStore.swift */; };
 		A10000000000000000000013 /* GuardianGeofence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* GuardianGeofence.swift */; };
 		A10000000000000000000014 /* GuardianLocationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* GuardianLocationPolicy.swift */; };
 		A10000000000000000000015 /* GuardianCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* GuardianCoreTests.swift */; };
 		A10000000000000000000016 /* GuardianInactivityDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* GuardianInactivityDetector.swift */; };
+		A10000000000000000000017 /* GuardianCriticalMessaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* GuardianCriticalMessaging.swift */; };
 		FCD397D5AA59D013AC86E02F /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
@@ -62,6 +64,7 @@
 		A20000000000000000000009 /* GuardianCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuardianCoreTests.swift; sourceTree = "<group>"; };
 		A2000000000000000000000A /* DaojiaShuoYishengTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DaojiaShuoYishengTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A2000000000000000000000B /* GuardianInactivityDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuardianInactivityDetector.swift; sourceTree = "<group>"; };
+		A2000000000000000000000C /* GuardianCriticalMessaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuardianCriticalMessaging.swift; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
@@ -150,6 +153,7 @@
 				A20000000000000000000007 /* GuardianNativeModule.swift */,
 				A20000000000000000000008 /* GuardianNativeModule.m */,
 				A2000000000000000000000B /* GuardianInactivityDetector.swift */,
+				A2000000000000000000000C /* GuardianCriticalMessaging.swift */,
 			);
 			path = GuardianCore;
 			sourceTree = "<group>";
@@ -359,6 +363,7 @@
 				A10000000000000000000007 /* GuardianNativeModule.swift in Sources */,
 				A10000000000000000000008 /* GuardianNativeModule.m in Sources */,
 				A10000000000000000000009 /* GuardianInactivityDetector.swift in Sources */,
+				A1000000000000000000000A /* GuardianCriticalMessaging.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -372,6 +377,7 @@
 				A10000000000000000000014 /* GuardianLocationPolicy.swift in Sources */,
 				A10000000000000000000015 /* GuardianCoreTests.swift in Sources */,
 				A10000000000000000000016 /* GuardianInactivityDetector.swift in Sources */,
+				A10000000000000000000017 /* GuardianCriticalMessaging.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

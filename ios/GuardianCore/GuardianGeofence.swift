@@ -64,4 +64,12 @@ struct GuardianGeofence: Codable {
         region.notifyOnExit = true
         return region
     }
+
+    func matches(_ region: CLCircularRegion) -> Bool {
+        region.identifier == id &&
+            abs(region.center.latitude - center.latitude) < 0.000_001 &&
+            abs(region.center.longitude - center.longitude) < 0.000_001 &&
+            abs(region.radius - radiusMeters) < 0.5 &&
+            region.notifyOnEntry && region.notifyOnExit
+    }
 }

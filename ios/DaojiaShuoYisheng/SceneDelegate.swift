@@ -2,6 +2,7 @@ import UIKit
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   var window: UIWindow?
+  private var hasBecomeActive = false
 
   func scene(
     _ scene: UIScene,
@@ -16,7 +17,14 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     let window = UIWindow(windowScene: windowScene)
+    window.backgroundColor = guardianBackgroundColor
     self.window = window
     appDelegate.startReactNative(in: window)
+  }
+
+  func sceneDidBecomeActive(_ scene: UIScene) {
+    defer { hasBecomeActive = true }
+    guard hasBecomeActive else { return }
+    GuardianBootstrap.restore(reason: "scene-active")
   }
 }

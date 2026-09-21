@@ -39,10 +39,19 @@
 	<string>用于设置家庭与劳作地点，并在守护开启时判断是否进入或离开这些区域。</string>
 	<key>NSMotionUsageDescription</key>
 	<string>用于结合运动信号判断设备是否可能长时间没有活动。</string>
+	<key>NSCriticalMessagingUsageDescription</key>
+	<string>当系统检测到可能需要帮助的异常情况时，用于向已设置的家人发送重要短信。</string>
+	<key>GuardianCriticalMessagingEnabled</key>
+	<false/>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.llingrui.iamhome.guardian.refresh</string>
+	</array>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
+		<string>fetch</string>
 		<string>location</string>
 	</array>
 	<key>UILaunchStoryboardName</key>

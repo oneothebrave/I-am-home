@@ -11,6 +11,16 @@
 			<dict>
 				<key>UUID</key>
 				<string>EFEA3710-7EA9-478A-9C72-60A16325471C</string>
+				<key>WFInput</key>
+				<dict>
+					<key>Value</key>
+					<dict>
+						<key>Type</key>
+						<string>ExtensionInput</string>
+					</dict>
+					<key>WFSerializationType</key>
+					<string>WFTextTokenAttachment</string>
+				</dict>
 			</dict>
 		</dict>
 		<dict>
@@ -125,7 +135,7 @@
 	<key>WFWorkflowHasOutputFallback</key>
 	<false/>
 	<key>WFWorkflowHasShortcutInputVariables</key>
-	<false/>
+	<true/>
 	<key>WFWorkflowIcon</key>
 	<dict>
 		<key>WFWorkflowIconGlyphNumber</key>

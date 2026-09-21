@@ -94,11 +94,11 @@ export function parseGuardianConfig(value: unknown): GuardianConfig {
       isClockTime(schedule.expectedReturnTime),
     '时间格式应为 HH:mm。',
   );
-  check(schedule.startTime < schedule.expectedReturnTime, '预计回家时间应晚于开始守护时间。');
+  check(schedule.startTime < schedule.expectedReturnTime, '结束时间应晚于开始时间。');
   check(
-    numberIn(schedule.noMotionThresholdMinutes, 30, 240) &&
+    numberIn(schedule.noMotionThresholdMinutes, 1, 240) &&
       Number.isInteger(schedule.noMotionThresholdMinutes),
-    '停留阈值应在 30 至 240 分钟之间。',
+    '停留阈值应在 1 至 240 分钟之间。',
   );
   check(
     numberIn(schedule.escalationDelayMinutes, 5, 60) &&
@@ -137,7 +137,7 @@ export function parseGuardianEvent(value: unknown): GuardianEvent {
   );
   check(eventTypes.includes(value.type as GuardianEventType), '事件类型无效。');
   check(
-    ['geofence', 'location', 'motion', 'battery', 'notification', 'user'].includes(
+    ['geofence', 'location', 'motion', 'coreMotion', 'pedometer', 'visit', 'battery', 'notification', 'user'].includes(
       String(value.source),
     ),
     '事件来源无效。',

@@ -26,6 +26,9 @@ export type GuardianEventSource =
   | 'geofence'
   | 'location'
   | 'motion'
+  | 'coreMotion'
+  | 'pedometer'
+  | 'visit'
   | 'battery'
   | 'notification'
   | 'user';

@@ -14,8 +14,7 @@ const placeOptions: Array<{
   defaultRadius: (typeof radiusOptions)[number];
 }> = [
   { kind: 'home', label: '家', defaultRadius: 150 },
-  { kind: 'work', label: '菜地', defaultRadius: 500 },
-  { kind: 'waypoint', label: '常去地点', defaultRadius: 300 },
+  { kind: 'work', label: '农场', defaultRadius: 500 },
 ];
 
 const syncCopy: Record<GeofenceSyncStatus, string> = {
@@ -154,8 +153,6 @@ export function PlacesScreen({
 
   return (
     <>
-      <Text style={styles.screenTitle}>地点</Text>
-
       {geofences.length > 0 ? (
         <>
           <View style={styles.placeSummaryCard}>
@@ -185,7 +182,7 @@ export function PlacesScreen({
                   >
                     <View style={styles.placeIcon}>
                       <Text style={styles.placeIconText}>
-                        {geofence.kind === 'home' ? '家' : geofence.kind === 'work' ? '地' : '常'}
+                        {geofence.kind === 'home' ? '家' : geofence.kind === 'work' ? '农' : '常'}
                       </Text>
                     </View>
                     <View style={styles.flexItem}>
@@ -414,7 +411,7 @@ export function PlacesScreen({
                 ))}
               </View>
               <Text style={styles.fieldHelpText}>
-                家建议 150 米，常去地点建议 300 米，菜地等户外区域建议 500 米。
+                围栏需要容纳定位误差：家建议 150 米，农场等户外区域建议 500 米。
               </Text>
 
               <TouchableOpacity

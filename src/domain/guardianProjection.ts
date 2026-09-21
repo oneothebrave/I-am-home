@@ -41,8 +41,7 @@ export function projectGuardianEvents(input: GuardianEvent[], now = Date.now()) 
       batteryLevel = event.batteryLevel;
     if (event.locationLabel) locationLabel = event.locationLabel;
     else if (event.type === 'RETURN_HOME') locationLabel = '家附近';
-    else if (event.location)
-      locationLabel = `${event.location.latitude.toFixed(4)}, ${event.location.longitude.toFixed(4)}`;
+    else if (event.location) locationLabel = '守护地点外';
 
     if (safetyTypes.has(event.type)) lastSafeEvent = event;
     if (event.type === 'USER_CONFIRMED_SAFE') {

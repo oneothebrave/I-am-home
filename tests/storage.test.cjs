@@ -181,6 +181,9 @@ test('R12: invalid time, phone, duplicate contacts and excessive fences are reje
       value.schedule.expectedReturnTime = '06:00';
     },
     (value) => {
+      value.schedule.noMotionThresholdMinutes = 0;
+    },
+    (value) => {
       value.contacts[0].phone = 'x';
     },
     (value) => {
@@ -198,6 +201,11 @@ test('R12: invalid time, phone, duplicate contacts and excessive fences are reje
     mutate(value);
     assert.throws(() => parseGuardianConfig(value));
   }
+});
+test('one-minute inactivity threshold is accepted for field testing', () => {
+  const value = initial().config;
+  value.schedule.noMotionThresholdMinutes = 1;
+  assert.equal(parseGuardianConfig(value).schedule.noMotionThresholdMinutes, 1);
 });
 test('repository serializes writes and snapshots values before awaiting', async () => {
   const gate = deferred();

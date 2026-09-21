@@ -1,8 +1,8 @@
 import { Linking } from 'react-native';
 
-export const SHORTCUT_NOTIFICATION_NAME = '到家了么通知';
+export const SHORTCUT_NOTIFICATION_NAME = '到家了么短信通知 V3';
 export const SHORTCUT_NOTIFICATION_INSTALL_URL =
-  'https://www.icloud.com/shortcuts/83ac6708621a475589c98e59c27b6949';
+  'https://www.icloud.com/shortcuts/f8e16cab9ea34fffb16cb514108ada44';
 
 export interface ShortcutNotificationInput {
   phone: string;

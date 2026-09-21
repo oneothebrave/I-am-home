@@ -28,7 +28,7 @@
 
 ## 运行验证
 
-Windows 基线验证：`npm ci`、`npm run typecheck`、`npm run bundle:ios` 均通过。2026-09-21 在 macOS 上用 Node 26、Xcode 27 和 iOS 27 模拟器重复执行检查；当前 `npm test` 共 55 项全部通过，iOS Debug 编译与 8 项 Swift XCTest 也全部通过。远端 GitHub Actions 尚未在本文档中记录结论。
+Windows 基线验证：`npm ci`、`npm run typecheck`、`npm run bundle:ios` 均通过。2026-09-21 在 macOS 上用 Node 26、Xcode 27 和 iOS 27 模拟器重复执行检查；当前 `npm test` 共 60 项全部通过，iOS Debug 编译与 10 项 Swift XCTest 也全部通过。远端 GitHub Actions 尚未在本文档中记录结论。
 
 ```powershell
 npm ci
@@ -49,6 +49,6 @@ npm run bundle:ios
 
 Xcode 27 开始要求使用 UIKit scene 生命周期，工程已通过 `SceneDelegate` 和 `UIApplicationSceneManifest` 完成迁移。React Native 0.82 所带 `fmt` 在 Apple Clang 21 下还需要 Podfile 中的兼容补丁；`pod install` 会可重复地应用该补丁，并将所有 Pods 的最低部署版本对齐到 React Native 支持范围。
 
-真实设备模式现在可以清除演示数据、读取定位/精确位置/运动权限、获取一次真实位置、同步原生围栏并启停后台守护。定位样本必须在 2 分钟内且水平精度不超过 100 米；围栏和启停操作均串行处理快速变化，并暴露失败、回滚与重试。家外长时间无明显移动执行器已接入原生位置、活动和步数信号，且不向本人发送本地确认通知。尚未完成预计回家、低电量的正式后台执行器、家人 APNs/自动短信和送达回执；本次家外停留规则也仍需长时间真机实测。
+真实设备模式现在可以清除演示数据、读取定位/精确位置/运动权限、获取一次真实位置、同步原生围栏并启停后台守护。定位样本必须在 2 分钟内且水平精度不超过 100 米；围栏和启停操作均串行处理快速变化，并暴露失败、回滚与重试。家外长时间无明显移动执行器已接入原生位置、活动和步数信号，每日单段守护时间会限制该规则的累计，且不向本人发送本地确认通知。尚未完成低电量的正式后台执行器、家人 APNs/自动短信和送达回执；本次家外停留规则及守护时段边界也仍需长时间真机实测。
 
 旧 `HH:mm` 记录的原始日期无法精确恢复，迁移按保存时间推断并保留说明。未带接收人 ID 的旧演练通知不会被猜测为已通知某位家人。
