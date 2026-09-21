@@ -9,12 +9,18 @@ import { createId } from '../utils/id';
 export function FamilyScreen({
   contacts,
   onAddContact,
+  onInstallShortcut,
   onRemoveContact,
+  onSendTestNotification,
+  testNotificationPending = false,
   showNotificationPolicy = true,
 }: {
   contacts: GuardianContact[];
   onAddContact: (contact: GuardianContact) => void;
+  onInstallShortcut: () => void;
   onRemoveContact: (id: string) => void;
+  onSendTestNotification: () => void;
+  testNotificationPending?: boolean;
   showNotificationPolicy?: boolean;
 }) {
   const [name, setName] = useState('');
@@ -22,6 +28,7 @@ export function FamilyScreen({
   const [phone, setPhone] = useState('');
   const canAddMore = contacts.length < 3;
   const [error, setError] = useState('');
+  const firstContact = [...contacts].sort((a, b) => a.priority - b.priority)[0];
 
   const handleAddContact = () => {
     if (!canAddMore || !name.trim() || !phone.trim()) {
@@ -112,10 +119,46 @@ export function FamilyScreen({
         </TouchableOpacity>
       </Section>
 
+      <Section title="短信快捷指令">
+        <Text style={styles.settingHelpText}>
+          测试短信由 iPhone 自带的“快捷指令”发出，不经过第三方通知平台，只需安装一次。
+        </Text>
+
+        <Text style={styles.shortcutInstallText}>
+          安装时无需再选择通讯录联系人。发送时会自动使用 App 中保存的第 1 位家人手机号。
+        </Text>
+
+        <TouchableOpacity
+          accessibilityRole="button"
+          activeOpacity={0.8}
+          onPress={onInstallShortcut}
+          style={styles.secondaryOutlineButton}
+        >
+          <Text style={styles.secondaryOutlineButtonText}>安装短信快捷指令</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          accessibilityRole="button"
+          activeOpacity={0.8}
+          disabled={!firstContact || testNotificationPending}
+          onPress={onSendTestNotification}
+          style={[
+            styles.primaryButton,
+            (!firstContact || testNotificationPending) && styles.secondaryButtonDisabled,
+          ]}
+        >
+          <Text style={styles.primaryButtonText}>
+            {testNotificationPending ? '正在打开…' : firstContact ? '发送测试短信' : '请先添加家人'}
+          </Text>
+        </TouchableOpacity>
+        <Text style={styles.shortcutFootnote}>
+          当前只用于前台主动测试，后台检测不会自动打开快捷指令。首次测试时，iOS 会要求发送信息权限；如果出现“始终允许”，请选择它。发送使用第 1 位家人，可能产生短信费用。
+        </Text>
+      </Section>
+
       {showNotificationPolicy && (
         <Section title="通知策略">
-          <InfoLine label="先提醒本人" value="异常出现后，先让本人确认我没事。" />
-          <InfoLine label="再通知家人" value="未确认时按家人优先级逐个升级。" />
+          <InfoLine label="直接通知家人" value="检测到异常后，不打扰本人，直接进入家人通知队列。" />
+          <InfoLine label="通知顺序" value="按家人优先级逐个发送。" />
           <InfoLine label="通知内容" value="包含最后位置、最后信号、电量和异常原因。" />
         </Section>
       )}

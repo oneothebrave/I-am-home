@@ -61,14 +61,9 @@ test('SOS after a previously notified passive alert starts a fresh notification 
   assert.equal(result.nextContact.id, 'contact-1');
   assert.equal(result.notifiedCount, 0);
 });
-test('manual progression follows recipients and reaches a terminal state', () => {
+test('manual progression notifies family directly and reaches a terminal state', () => {
   let events = [risk];
-  for (const type of [
-    'SAFETY_CHECK_REQUESTED',
-    'FAMILY_NOTIFIED',
-    'FAMILY_NOTIFIED',
-    'ESCALATION_FINISHED',
-  ]) {
+  for (const type of ['FAMILY_NOTIFIED', 'FAMILY_NOTIFIED', 'ESCALATION_FINISHED']) {
     const next = escalation(events).nextEvent;
     assert.equal(next.type, type);
     events.push(event(type, events.length + 1, next));
@@ -127,10 +122,18 @@ test('failed delivery retries the same contact; acknowledgement preserves the al
   assert.equal(snapshot(events).status, 'emergency');
 });
 test('live escalation respects deadlines and does not fabricate sent events', () => {
-  assert.equal(escalation([risk, prompt], config, { simulate: false }).phase, 'waiting');
-  const late = getEscalationState(snapshot([risk, prompt]), config, { now: now + 600_000 });
+  assert.equal(escalation([risk], config, { simulate: false }).phase, 'family_queue');
+  assert.equal(escalation([risk, notified], config, { simulate: false }).phase, 'waiting');
+  const late = getEscalationState(snapshot([risk, notified]), config, { now: now + 600_000 });
   assert.equal(late.phase, 'family_queue');
   assert.equal(late.nextEvent, undefined);
+});
+test('no-motion risk goes directly to the family queue without a self prompt', () => {
+  const noMotion = event('NO_MOTION_FOR_LONG_TIME', 1, { source: 'motion' });
+  const result = escalation([noMotion]);
+  assert.equal(result.phase, 'family_queue');
+  assert.equal(result.nextEvent.type, 'FAMILY_NOTIFIED');
+  assert.doesNotMatch(result.title, /本人/);
 });
 test('R08: location and battery are preserved across unrelated events', () => {
   const result = snapshot([

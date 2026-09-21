@@ -4,11 +4,17 @@ const React = require('react');
 const { create, act } = require('react-test-renderer');
 const { createLoader } = require('./loadTs.cjs');
 global.IS_REACT_ACT_ENVIRONMENT = true;
+const openedUrls = [];
 const load = createLoader({
   '@react-native-async-storage/async-storage': {},
   'react-native': {
     Alert: { alert() {} },
-    Linking: { async openSettings() {} },
+    Linking: {
+      async openSettings() {},
+      async openURL(url) {
+        openedUrls.push(url);
+      },
+    },
     Text: 'Text',
     TextInput: 'TextInput',
     TouchableOpacity: 'TouchableOpacity',
@@ -24,7 +30,46 @@ const { useGuardian } = load('src/state/useGuardian.ts');
 const { RulesScreen } = load('src/screens/RulesScreen.tsx');
 const { PlacesScreen } = load('src/screens/PlacesScreen.tsx');
 const { getFootprintEvents } = load('src/screens/FootprintsScreen.tsx');
+const {
+  SHORTCUT_NOTIFICATION_INSTALL_URL,
+  SHORTCUT_NOTIFICATION_NAME,
+  buildShortcutNotificationUrl,
+  composeShortcutTestMessage,
+  openShortcutInstaller,
+  sendShortcutNotification,
+} = load('src/native/shortcutNotification.ts');
 const now = Date.parse('2026-09-08T10:00:00Z');
+
+test('shortcut installer and notification open the expected system URLs', async () => {
+  openedUrls.length = 0;
+  const message = composeShortcutTestMessage('小林');
+  const input = { phone: '18768106491', message };
+  const url = new URL(buildShortcutNotificationUrl(input));
+
+  assert.equal(url.protocol, 'shortcuts:');
+  assert.equal(url.hostname, 'run-shortcut');
+  assert.equal(url.searchParams.get('name'), SHORTCUT_NOTIFICATION_NAME);
+  assert.equal(url.searchParams.get('input'), 'text');
+  assert.deepEqual(JSON.parse(url.searchParams.get('text')), input);
+  assert.match(message, /测试通知/);
+  assert.match(message, /目前没有异常/);
+  assert.throws(
+    () => buildShortcutNotificationUrl({ phone: ' ', message }),
+    /收件人手机号不能为空/,
+  );
+  assert.throws(
+    () => buildShortcutNotificationUrl({ phone: input.phone, message: ' ' }),
+    /通知内容不能为空/,
+  );
+  assert.equal(
+    SHORTCUT_NOTIFICATION_INSTALL_URL,
+    'https://www.icloud.com/shortcuts/83ac6708621a475589c98e59c27b6949',
+  );
+
+  await openShortcutInstaller();
+  await sendShortcutNotification(input);
+  assert.deepEqual(openedUrls, [SHORTCUT_NOTIFICATION_INSTALL_URL, url.toString()]);
+});
 
 test('footprints include only location transitions and show the newest first', () => {
   const events = [

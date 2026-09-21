@@ -11,7 +11,8 @@
 | React StrictMode 加载、规则表单草稿 | 组件测试通过，原生控件被测试替身替换 |
 | v2 schema、旧数据迁移、完整日期、稳定 ID | 已实现，校验和跨午夜迁移测试通过 |
 | 原生事件先落盘再确认消费 | JS 侧测试通过；Swift 队列源码及 XCTest 已提供 |
-| 原生定位质量过滤、持久配置、启动恢复入口 | 已接入 iOS target、通过 Mac 编译和 XCTest；待真机验证 |
+| 原生定位质量过滤、持久配置、启动恢复入口 | 已接入 iOS target、通过 Mac 编译和 XCTest；待继续真机验证 |
+| 家外长时间无明显移动执行器 | 原生状态机、位置/运动融合、持久恢复和单次去重已实现；待长时间真机实测 |
 | 类型检查、iOS JS 发布包、Windows CI 配置 | 本地检查已执行；远端 CI 尚未运行 |
 
 ## 已覆盖的审查问题
@@ -27,7 +28,7 @@
 
 ## 运行验证
 
-Windows 基线验证：`npm ci`、`npm run typecheck`、`npm run bundle:ios` 均通过。2026-09-20 又在 macOS 上用 Node 26、Xcode 27 和 iOS 27 模拟器重复执行检查；当前 `npm test` 共 50 项全部通过，iOS Debug 编译、模拟器启动与 4 项 Swift XCTest 也全部通过。远端 GitHub Actions 尚未在本文档中记录结论。
+Windows 基线验证：`npm ci`、`npm run typecheck`、`npm run bundle:ios` 均通过。2026-09-21 在 macOS 上用 Node 26、Xcode 27 和 iOS 27 模拟器重复执行检查；当前 `npm test` 共 55 项全部通过，iOS Debug 编译与 8 项 Swift XCTest 也全部通过。远端 GitHub Actions 尚未在本文档中记录结论。
 
 ```powershell
 npm ci
@@ -48,6 +49,6 @@ npm run bundle:ios
 
 Xcode 27 开始要求使用 UIKit scene 生命周期，工程已通过 `SceneDelegate` 和 `UIApplicationSceneManifest` 完成迁移。React Native 0.82 所带 `fmt` 在 Apple Clang 21 下还需要 Podfile 中的兼容补丁；`pod install` 会可重复地应用该补丁，并将所有 Pods 的最低部署版本对齐到 React Native 支持范围。
 
-真实设备模式现在可以清除演示数据、读取定位与精确位置权限、获取一次真实位置、同步原生围栏并启停后台守护。定位样本必须在 2 分钟内且水平精度不超过 100 米；围栏和启停操作均串行处理快速变化，并暴露失败、回滚与重试。地图选点、自动无运动/未回家判断的后台执行器、实际运动采集、本人本地通知、家人 APNs/短信和送达回执仍属后续功能。
+真实设备模式现在可以清除演示数据、读取定位/精确位置/运动权限、获取一次真实位置、同步原生围栏并启停后台守护。定位样本必须在 2 分钟内且水平精度不超过 100 米；围栏和启停操作均串行处理快速变化，并暴露失败、回滚与重试。家外长时间无明显移动执行器已接入原生位置、活动和步数信号，且不向本人发送本地确认通知。尚未完成预计回家、低电量的正式后台执行器、家人 APNs/自动短信和送达回执；本次家外停留规则也仍需长时间真机实测。
 
 旧 `HH:mm` 记录的原始日期无法精确恢复，迁移按保存时间推断并保留说明。未带接收人 ID 的旧演练通知不会被猜测为已通知某位家人。

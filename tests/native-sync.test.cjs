@@ -432,10 +432,11 @@ test('bridge export declarations match the TS queue and permission contract (sta
     'getCurrentLocation',
     'getPermissions',
     'requestPermissions',
+    'requestMotionPermission',
     'startGuardian',
     'stopGuardian',
     'setGeofences',
-    'confirmSafe',
+    'setNoMotionThresholdMinutes',
     'sendSOS',
   ]) {
     assert.ok(swift.includes(`func ${method}(`));

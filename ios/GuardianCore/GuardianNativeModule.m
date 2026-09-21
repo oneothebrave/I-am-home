@@ -6,6 +6,9 @@
 RCT_EXTERN_METHOD(requestPermissions:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(requestMotionPermission:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(getPermissions:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
@@ -33,7 +36,8 @@ RCT_EXTERN_METHOD(setGeofences:(NSArray *)rawGeofences
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
-RCT_EXTERN_METHOD(confirmSafe:(RCTPromiseResolveBlock)resolve
+RCT_EXTERN_METHOD(setNoMotionThresholdMinutes:(nonnull NSNumber *)value
+                  resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(sendSOS:(RCTPromiseResolveBlock)resolve

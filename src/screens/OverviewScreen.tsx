@@ -1,5 +1,5 @@
 import React from 'react';
-import { Image, Text, TouchableOpacity, View } from 'react-native';
+import { Image, Text, View } from 'react-native';
 import type { GuardianStatusSnapshot } from '../domain/types';
 import type { getStatusTone } from '../domain/guardianRules';
 import { styles } from '../styles/appStyles';
@@ -9,7 +9,6 @@ export function OverviewScreen({
   guardianStatus,
   isGuardianOn,
   mode,
-  onConfirmSafe,
   snapshot,
   tone,
 }: {
@@ -17,7 +16,6 @@ export function OverviewScreen({
   guardianStatus: string;
   isGuardianOn: boolean;
   mode: 'demo' | 'device';
-  onConfirmSafe: () => void;
   snapshot: GuardianStatusSnapshot;
   tone: ReturnType<typeof getStatusTone>;
 }) {
@@ -86,16 +84,12 @@ export function OverviewScreen({
         </View>
       </View>
 
-      {needsConfirmation && (
-        <TouchableOpacity activeOpacity={0.8} onPress={onConfirmSafe} style={styles.primaryButton}>
-          <Text style={styles.primaryButtonText}>我没事</Text>
-        </TouchableOpacity>
-      )}
-
       {mode === 'device' && (
         <View style={styles.noticeCard}>
-          <Text style={styles.noticeTitle}>家人通知尚未启用</Text>
-          <Text style={styles.noticeText}>当前异常与守护记录只保存在本机。</Text>
+          <Text style={styles.noticeTitle}>自动家人通知尚未启用</Text>
+          <Text style={styles.noticeText}>
+            当前可以在本机识别并记录异常；短信快捷指令仍只支持主动测试。
+          </Text>
         </View>
       )}
     </>

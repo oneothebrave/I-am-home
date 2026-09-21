@@ -67,8 +67,14 @@ final class GuardianNativeModule: RCTEventEmitter {
     @objc(startGuardian:resolver:rejecter:)
     func startGuardian(config: [String: Any], resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
         perform(resolve, reject) { runtime in
-            guard let raw = config["geofences"] as? [[String: Any]] else { throw GuardianCoreError.invalidConfiguration }
-            try runtime.requireService().start(geofences: raw.map { try GuardianGeofence(dictionary: $0) })
+            guard let raw = config["geofences"] as? [[String: Any]],
+                  let schedule = config["schedule"] as? [String: Any],
+                  let threshold = schedule["noMotionThresholdMinutes"] as? NSNumber
+            else { throw GuardianCoreError.invalidConfiguration }
+            try runtime.requireService().start(
+                geofences: raw.map { try GuardianGeofence(dictionary: $0) },
+                noMotionThresholdMinutes: threshold.intValue
+            )
             runtime.clearLastError()
             return nil
         }
@@ -87,6 +93,15 @@ final class GuardianNativeModule: RCTEventEmitter {
     func setGeofences(rawGeofences: [[String: Any]], resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
         perform(resolve, reject) { runtime in
             try runtime.requireService().setGeofences(rawGeofences.map { try GuardianGeofence(dictionary: $0) })
+            runtime.clearLastError()
+            return nil
+        }
+    }
+
+    @objc(setNoMotionThresholdMinutes:resolver:rejecter:)
+    func setNoMotionThresholdMinutes(value: NSNumber, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+        perform(resolve, reject) { runtime in
+            try runtime.requireService().setNoMotionThresholdMinutes(value.intValue)
             runtime.clearLastError()
             return nil
         }
@@ -117,14 +132,6 @@ final class GuardianNativeModule: RCTEventEmitter {
         }
     }
 
-    @objc(confirmSafe:rejecter:)
-    func confirmSafe(resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
-        perform(resolve, reject) { runtime in
-            try runtime.record(GuardianEvent(type: .userConfirmedSafe, title: "本人确认平安", description: "本人已明确确认平安。", timestamp: Date(), source: "user"))
-            return nil
-        }
-    }
-
     @objc(sendSOS:rejecter:)
     func sendSOS(resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
         perform(resolve, reject) { runtime in
@@ -138,6 +145,14 @@ final class GuardianNativeModule: RCTEventEmitter {
     func requestPermissions(resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
         perform(resolve, reject) { runtime in
             try runtime.requireService().requestPermissions()
+            return nil
+        }
+    }
+
+    @objc(requestMotionPermission:rejecter:)
+    func requestMotionPermission(resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+        perform(resolve, reject) { runtime in
+            try runtime.requireService().requestMotionPermission()
             return nil
         }
     }

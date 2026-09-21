@@ -21,9 +21,7 @@ export function buildGuardianSnapshot(
       ? '求助尚未解除'
       : incident.severity === 'emergency'
         ? '需要家人确认'
-        : incident.selfPromptAt
-          ? '等待本人确认'
-          : '需要留意'
+        : '检测到异常'
     : isFresh
       ? lastSafeEvent.type === 'RETURN_HOME'
         ? '已经到家'
@@ -36,7 +34,7 @@ export function buildGuardianSnapshot(
       ? riskReason
       : isFresh
         ? lastSafeEvent.description
-        : '尚无近期可信信号，请联系本人确认。',
+        : '尚无近期可信信号，建议家人主动联系。',
     lastSafeSignal: lastSafeEvent
       ? `${formatEventTime(lastSafeEvent.timestamp, now)} ${lastSafeEvent.title}`
       : '暂无可信信号',

@@ -3,6 +3,11 @@ import { Alert, Linking, Text, TouchableOpacity, View } from 'react-native';
 import type { GuardianContact, GuardianEvent, GuardianSchedule } from '../domain/types';
 import type { PermissionState } from '../native/GuardianNative';
 import type { GeofenceSyncStatus } from '../native/guardianGeofenceSync';
+import {
+  composeShortcutTestMessage,
+  openShortcutInstaller,
+  sendShortcutNotification,
+} from '../native/shortcutNotification';
 import { styles } from '../styles/appStyles';
 import { FamilyScreen } from './FamilyScreen';
 import { FootprintsScreen, getFootprintEvents } from './FootprintsScreen';
@@ -22,6 +27,13 @@ const accuracyLabel: Record<PermissionState['locationAccuracy'], string> = {
   unknown: '尚未确认',
   reduced: '大致位置',
   full: '精确位置',
+};
+
+const motionLabel: Record<PermissionState['motion'], string> = {
+  notDetermined: '尚未设置',
+  denied: '未允许',
+  restricted: '受系统限制',
+  authorized: '已允许',
 };
 
 const syncLabel: Record<GeofenceSyncStatus, string> = {
@@ -73,6 +85,7 @@ export function MyScreen({
   onPauseGuardian,
   onRefreshPermissions,
   onRemoveContact,
+  onRequestMotionPermission,
   onRequestPermissions,
   onResetLocalState,
   onResumeGuardian,
@@ -94,13 +107,16 @@ export function MyScreen({
   onPauseGuardian: () => Promise<void>;
   onRefreshPermissions: () => Promise<void>;
   onRemoveContact: (id: string) => void;
+  onRequestMotionPermission: () => Promise<void>;
   onRequestPermissions: () => Promise<void>;
   onResetLocalState: () => Promise<void>;
   onResumeGuardian: () => Promise<void>;
   onRetryGeofenceSync: () => Promise<void>;
 }) {
   const [activeSection, setActiveSection] = useState<MySection>();
+  const [testNotificationPending, setTestNotificationPending] = useState(false);
   const footprintCount = getFootprintEvents(events).length;
+  const firstContact = [...contacts].sort((a, b) => a.priority - b.priority)[0];
 
   const sectionTitle =
     activeSection === 'family'
@@ -108,7 +124,7 @@ export function MyScreen({
       : activeSection === 'schedule'
         ? '守护时间'
         : activeSection === 'permissions'
-          ? '定位权限'
+          ? '系统权限'
           : '足迹';
 
   const confirmPause = () =>
@@ -122,6 +138,51 @@ export function MyScreen({
       { text: '取消', style: 'cancel' },
       { text: '清除并重新设置', style: 'destructive', onPress: () => void onResetLocalState() },
     ]);
+
+  const showShortcutInstallError = () =>
+    Alert.alert(
+      '无法打开安装页面',
+      '请检查网络，并确认 iPhone 已安装系统自带的“快捷指令”App，然后再试一次。',
+    );
+
+  const handleInstallShortcut = async () => {
+    try {
+      await openShortcutInstaller();
+    } catch {
+      showShortcutInstallError();
+    }
+  };
+
+  const confirmTestNotification = () => {
+    if (!firstContact || testNotificationPending) return;
+
+    Alert.alert(
+      '发送测试短信？',
+      `将向第 1 位家人 ${firstContact.name}（${firstContact.phone}）发送一条测试短信。首次运行时，iOS 会要求一次发送权限。`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '立即测试',
+          onPress: async () => {
+            setTestNotificationPending(true);
+            try {
+              await sendShortcutNotification({
+                phone: firstContact.phone,
+                message: composeShortcutTestMessage(firstContact.name),
+              });
+            } catch {
+              Alert.alert(
+                '无法运行快捷指令',
+                '请先安装“到家了么通知”快捷指令，然后再试一次。',
+              );
+            } finally {
+              setTestNotificationPending(false);
+            }
+          },
+        },
+      ],
+    );
+  };
 
   if (activeSection) {
     return (
@@ -139,16 +200,19 @@ export function MyScreen({
         {activeSection === 'family' && (
           <>
             <View style={styles.noticeCard}>
-              <Text style={styles.noticeTitle}>家人通知尚未启用</Text>
+              <Text style={styles.noticeTitle}>通过快捷指令发短信</Text>
               <Text style={styles.noticeText}>
-                当前只会把联系方式保存在本机，不会自动发送短信或电话。
+                联系方式只在本机保存。主动测试时，App 会将第 1 位家人的手机号和通知内容交给系统快捷指令；后台异常不会自动打开它。
               </Text>
             </View>
             <FamilyScreen
               contacts={contacts}
               onAddContact={onAddContact}
+              onInstallShortcut={() => void handleInstallShortcut()}
               onRemoveContact={onRemoveContact}
+              onSendTestNotification={confirmTestNotification}
               showNotificationPolicy={false}
+              testNotificationPending={testNotificationPending}
             />
           </>
         )}
@@ -172,6 +236,13 @@ export function MyScreen({
               </View>
               <View style={styles.permissionDivider} />
               <View style={styles.permissionRow}>
+                <Text style={styles.permissionLabel}>运动与健身</Text>
+                <Text style={styles.permissionValue}>
+                  {permissions ? motionLabel[permissions.motion] : '正在读取'}
+                </Text>
+              </View>
+              <View style={styles.permissionDivider} />
+              <View style={styles.permissionRow}>
                 <Text style={styles.permissionLabel}>位置精度</Text>
                 <Text style={styles.permissionValue}>
                   {permissions ? accuracyLabel[permissions.locationAccuracy] : '正在读取'}
@@ -185,7 +256,7 @@ export function MyScreen({
             </View>
 
             <Text style={styles.settingHelpText}>
-              自动守护需要“始终允许”和“精确位置”。位置数据只用于本机守护。
+              自动守护需要“始终允许”和“精确位置”。允许“运动与健身”后，系统会结合步行、跑步和乘车迹象，降低家外停留误判。数据只用于本机守护。
             </Text>
 
             {(permissions?.location === 'notDetermined' ||
@@ -201,9 +272,21 @@ export function MyScreen({
               </TouchableOpacity>
             )}
 
+            {permissions?.motion === 'notDetermined' && (
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => void onRequestMotionPermission()}
+                style={styles.primaryButton}
+              >
+                <Text style={styles.primaryButtonText}>允许运动与健身</Text>
+              </TouchableOpacity>
+            )}
+
             {(permissions?.location === 'denied' ||
               permissions?.location === 'restricted' ||
-              permissions?.locationAccuracy === 'reduced') && (
+              permissions?.locationAccuracy === 'reduced' ||
+              permissions?.motion === 'denied' ||
+              permissions?.motion === 'restricted') && (
               <TouchableOpacity
                 activeOpacity={0.8}
                 onPress={() => void Linking.openSettings()}
@@ -278,9 +361,17 @@ export function MyScreen({
           value={`${schedule.startTime}–${schedule.expectedReturnTime}`}
         />
         <SettingsRow
-          label="定位权限"
+          label="系统权限"
           onPress={() => setActiveSection('permissions')}
-          value={permissions ? permissionLabel[permissions.location] : '正在读取'}
+          value={
+            permissions?.location === 'always' &&
+            permissions.locationAccuracy === 'full' &&
+            permissions.motion === 'authorized'
+              ? '已就绪'
+              : permissions
+                ? permissionLabel[permissions.location]
+                : '正在读取'
+          }
         />
         <SettingsRow
           label="足迹"

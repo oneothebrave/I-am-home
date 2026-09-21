@@ -18,13 +18,14 @@ export type GuardianNativeModule = NativeEventQueue & {
   addListener: (eventName: string) => void;
   removeListeners: (count: number) => void;
   requestPermissions: () => Promise<void>;
+  requestMotionPermission: () => Promise<void>;
   getPermissions: () => Promise<PermissionState>;
   getCurrentLocation: () => Promise<unknown>;
   startGuardian: (config: GuardianConfig) => Promise<void>;
   stopGuardian: () => Promise<void>;
   setGeofences: (geofences: GuardianConfig['geofences']) => Promise<void>;
+  setNoMotionThresholdMinutes: (value: number) => Promise<void>;
   getCurrentStatus: () => Promise<GuardianNativeStatus>;
-  confirmSafe: () => Promise<void>;
   sendSOS: () => Promise<void>;
 };
 

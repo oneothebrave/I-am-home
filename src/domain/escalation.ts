@@ -7,7 +7,6 @@ import type {
 
 export type EscalationPhase =
   | 'idle'
-  | 'self_prompt'
   | 'waiting'
   | 'family_queue'
   | 'blocked'
@@ -50,7 +49,7 @@ export function getEscalationState(
       ...common,
       phase: 'acknowledged',
       title: '家人已接手',
-      description: '等待本人确认平安，告警尚未解除。',
+      description: '异常记录仍保留，直到系统检测到恢复信号。',
     };
   if (!contacts.length)
     return {
@@ -61,21 +60,6 @@ export function getEscalationState(
     };
   const simulationEvent = (event: GuardianEventDraft) =>
     simulate ? { ...event, incidentId: incident.id, simulated: true } : undefined;
-  if (incident.kind !== 'sos' && incident.severity !== 'emergency' && !incident.selfPromptAt) {
-    return {
-      ...common,
-      phase: 'self_prompt',
-      title: '先提醒本人',
-      description: '等待向本人发送确认提醒。',
-      nextActionLabel: simulate ? '演练提醒本人' : undefined,
-      nextEvent: simulationEvent({
-        type: 'SAFETY_CHECK_REQUESTED',
-        title: '模拟提醒本人',
-        description: '已演练本人确认提醒。',
-        source: 'notification',
-      }),
-    };
-  }
   const nextContact = contacts.find((contact) => !incident.notifiedContactIds.includes(contact.id));
   if (!nextContact) {
     return {
@@ -94,11 +78,7 @@ export function getEscalationState(
           }),
     };
   }
-  const anchor =
-    incident.lastNotificationAt ??
-    (incident.kind === 'sos' || incident.severity === 'emergency'
-      ? undefined
-      : incident.selfPromptAt);
+  const anchor = incident.lastNotificationAt;
   const due = anchor ? Date.parse(anchor) + config.schedule.escalationDelayMinutes * 60_000 : now;
   if (!simulate && now < due)
     return {

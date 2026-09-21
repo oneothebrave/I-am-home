@@ -51,7 +51,7 @@ export const guardianConfig: GuardianConfig = {
 const statusSnapshot: GuardianStatusSnapshot = {
   status: 'attention',
   headline: '需要留意',
-  detail: '手机在果园附近停留较久，系统已先提醒本人确认。',
+  detail: '手机在果园附近停留较久，需要家人联系确认。',
   lastSafeSignal: '今天 10:18 检测到移动',
   locationLabel: '果园附近',
   batteryLevel: 24,

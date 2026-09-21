@@ -88,8 +88,8 @@ export function RulesScreen({
       {showRiskExplanation && (
         <Section title="风险判断">
           <InfoLine label="绿色" value="离家、到达劳作地、回家、有移动，都可以续上安全状态。" />
-          <InfoLine label="黄色" value="长时间停留、超过预计回家时间、低电量时先提醒本人。" />
-          <InfoLine label="红色" value="本人未响应，或多个风险叠加时通知家人。" />
+          <InfoLine label="黄色" value="长时间停留、超过预计回家时间或低电量，需要通知家人留意。" />
+          <InfoLine label="红色" value="多个风险叠加时，提醒家人尽快联系确认。" />
         </Section>
       )}
     </>

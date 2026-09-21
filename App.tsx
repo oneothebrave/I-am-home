@@ -10,7 +10,6 @@ import {
 } from 'react-native';
 import { getStatusTone } from './src/domain/guardianRules';
 import { buildGuardianSnapshot } from './src/domain/riskEngine';
-import type { GuardianEventDraft } from './src/domain/types';
 import {
   parseCurrentLocationSample,
   type CurrentLocationSample,
@@ -52,6 +51,7 @@ function describeDeviceGuardian(
   permissions: PermissionState | undefined,
   geofenceSyncStatus: GeofenceSyncStatus,
   geofenceCount: number,
+  hasHomeGeofence: boolean,
   isPaused: boolean,
 ) {
   if (isPaused) return '已由你暂停；恢复后会继续在后台守护。';
@@ -65,8 +65,13 @@ function describeDeviceGuardian(
   if (permissions.locationAccuracy !== 'full') return '需要在系统设置中开启精确位置。';
   if (geofenceSyncStatus === 'error') return '守护地点同步失败，请重试。';
   if (geofenceSyncStatus !== 'synced') return '正在准备守护地点。';
-  if (control.nativeStatus?.isGuardianOn && control.nativeStatus.isMonitoring)
+  if (control.nativeStatus?.isGuardianOn && control.nativeStatus.isMonitoring) {
+    if (!hasHomeGeofence)
+      return '后台守护中；设置一个“家”地点后，才会启用家外长时间停留判断。';
+    if (permissions.motion !== 'authorized')
+      return '后台守护中；允许“运动与健身”后，家外停留判断会更可靠。';
     return '后台守护中，无需保持 App 打开。';
+  }
   if (control.nativeStatus?.isGuardianOn) return '守护已开启，正在恢复后台运行。';
   return '准备完成，正在自动启动守护。';
 }
@@ -88,6 +93,7 @@ function App(): React.JSX.Element {
   const state = useGuardian(store);
   const { config, isGuardianOn, isGuardianPaused, localEvents, mode } = state.data;
   const isHydrated = state.loadStatus === 'ready';
+  const hasHomeGeofence = config.geofences.some((fence) => fence.kind === 'home');
 
   const refreshPermissions = async () => {
     try {
@@ -158,6 +164,13 @@ function App(): React.JSX.Element {
   }, [config.geofences, isHydrated, mode]);
 
   useEffect(() => {
+    if (!isHydrated || mode !== 'device') return;
+    void getGuardianNative()
+      .setNoMotionThresholdMinutes(config.schedule.noMotionThresholdMinutes)
+      .catch((error) => setNativeError(error instanceof Error ? error.message : String(error)));
+  }, [config.schedule.noMotionThresholdMinutes, isHydrated, mode]);
+
+  useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, []);
@@ -178,12 +191,14 @@ function App(): React.JSX.Element {
         permissions,
         geofenceSyncStatus,
         config.geofences.length,
+        hasHomeGeofence,
         isGuardianPaused,
       ),
     [
       config.geofences.length,
       geofenceSyncStatus,
       guardianControlState,
+      hasHomeGeofence,
       isGuardianPaused,
       permissions,
     ],
@@ -196,11 +211,6 @@ function App(): React.JSX.Element {
     permissions.locationAccuracy === 'full' &&
     geofenceSyncStatus === 'synced' &&
     config.geofences.length > 0;
-
-  const addEvent = (draft: GuardianEventDraft) => {
-    store.addEvent({ ...draft, simulated: isHydrated ? mode === 'demo' : undefined });
-    setNow(Date.now());
-  };
 
   const requestLocationPermissions = async () => {
     try {
@@ -215,6 +225,23 @@ function App(): React.JSX.Element {
         if (next.location !== before) return;
       }
       setNativeError('定位权限尚未改变；如果系统没有再次弹窗，请打开系统设置。');
+    } catch (error) {
+      setNativeError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const requestMotionPermission = async () => {
+    try {
+      setNativeError('');
+      const native = getGuardianNative();
+      await native.requestMotionPermission();
+      for (let attempt = 0; attempt < 40; attempt++) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 500));
+        const next = await native.getPermissions();
+        setPermissions(next);
+        if (next.motion !== 'notDetermined') return;
+      }
+      setNativeError('“运动与健身”权限尚未改变；如果系统没有弹窗，请打开系统设置。');
     } catch (error) {
       setNativeError(error instanceof Error ? error.message : String(error));
     }
@@ -473,14 +500,6 @@ function App(): React.JSX.Element {
               mode={mode}
               snapshot={snapshot}
               tone={getStatusTone(overviewToneStatus)}
-              onConfirmSafe={() =>
-                addEvent({
-                  type: 'USER_CONFIRMED_SAFE',
-                  title: '本人确认平安',
-                  description: '本人已明确确认平安。',
-                  source: 'user',
-                })
-              }
             />
           )}
 
@@ -557,6 +576,7 @@ function App(): React.JSX.Element {
                     .map((contact, index) => ({ ...contact, priority: index + 1 })),
                 }));
               }}
+              onRequestMotionPermission={requestMotionPermission}
               onRequestPermissions={requestLocationPermissions}
               onResetLocalState={resetLocalState}
               onResumeGuardian={resumeGuardian}

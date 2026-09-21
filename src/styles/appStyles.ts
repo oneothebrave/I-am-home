@@ -1047,6 +1047,18 @@ export const styles = StyleSheet.create({
     lineHeight: 23,
     marginTop: 14,
   },
+  shortcutInstallText: {
+    color: '#3F3A33',
+    fontSize: 16,
+    lineHeight: 24,
+    marginTop: 14,
+  },
+  shortcutFootnote: {
+    color: '#756E64',
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 12,
+  },
   secondaryOutlineButton: {
     alignItems: 'center',
     borderColor: '#CFC7BA',
