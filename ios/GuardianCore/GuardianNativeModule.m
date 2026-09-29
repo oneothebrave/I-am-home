@@ -3,6 +3,10 @@
 
 @interface RCT_EXTERN_MODULE(GuardianNative, RCTEventEmitter)
 
+RCT_EXTERN_METHOD(checkLocalStorage:(NSDictionary *)request
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(requestPermissions:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
@@ -31,10 +35,17 @@ RCT_EXTERN_METHOD(acknowledgeEvents:(NSArray *)ids
                   rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(startGuardian:(NSDictionary *)config
+                  resumePaused:(BOOL)resumePaused
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(stopGuardian:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(clearLocalData:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(beginDataDeletion:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(setGeofences:(NSArray *)rawGeofences
@@ -46,6 +57,10 @@ RCT_EXTERN_METHOD(setNoMotionThresholdMinutes:(nonnull NSNumber *)value
                   rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(setActiveWindow:(NSDictionary *)schedule
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(setMonitoringPolicy:(NSDictionary *)schedule
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 

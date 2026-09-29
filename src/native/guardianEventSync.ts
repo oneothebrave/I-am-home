@@ -34,7 +34,7 @@ export function startGuardianEventSync(
       })
       .catch((error) => {
         successful = false;
-        onError(error);
+        if (!stopped) onError(error);
       })
       .finally(() => {
         running = undefined;
@@ -49,6 +49,7 @@ export function startGuardianEventSync(
   void drain();
   return {
     retry: drain,
+    async flush() { if (running) await running; },
     stop() {
       stopped = true;
       unsubscribe();

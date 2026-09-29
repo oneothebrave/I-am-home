@@ -56,6 +56,7 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
     private var oneShotLocationPending = false
     private var oneShotLocationObservers: [(Bool) -> Void] = []
     private var inactivityTimer: Timer?
+    private var riskTimer: Timer?
     private var activeWindowBoundaryTimer: Timer?
     private var monitoringRetry: DispatchWorkItem?
     private var lastAcceptedPedometerSteps = 0
@@ -91,6 +92,12 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
             previousLocation = cachedLocation
         }
         UIDevice.current.isBatteryMonitoringEnabled = true
+        for notification in [UIDevice.batteryLevelDidChangeNotification,
+                             UIDevice.batteryStateDidChangeNotification,
+                             UIApplication.backgroundRefreshStatusDidChangeNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(handleRiskSignal),
+                name: notification, object: nil)
+        }
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleSignificantTimeChange),
@@ -100,6 +107,7 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
     }
 
     deinit {
+        riskTimer?.invalidate()
         monitoringRetry?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
@@ -137,7 +145,9 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
         geofences: [GuardianGeofence],
         noMotionThresholdMinutes: Int,
         activeWindow: GuardianActiveWindow,
-        notificationContacts: [GuardianNotificationContact]
+        notificationContacts: [GuardianNotificationContact],
+        monitoringPolicy: GuardianMonitoringPolicy,
+        resumePaused: Bool = false
     ) throws {
         guard authorization == .authorizedAlways else { throw GuardianCoreError.missingPermissions }
         guard accuracyAuthorization == .fullAccuracy else { throw GuardianCoreError.missingPreciseLocation }
@@ -145,21 +155,31 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
         guard CLLocationManager.significantLocationChangeMonitoringAvailable(), CLLocationManager.isMonitoringAvailable(for: CLCircularRegion.self) else { throw GuardianCoreError.unavailable }
         guard !geofences.isEmpty else { throw GuardianCoreError.invalidConfiguration }
         try validateSupported(geofences)
+        try monitoringPolicy.validate()
+        if monitoringPolicy.mode == .standard {
+            try validateStandardMode(geofences: geofences, contacts: notificationContacts)
+        }
         try store.configure(
             enabled: true,
             geofences: geofences,
             noMotionThresholdMinutes: noMotionThresholdMinutes,
             activeWindow: activeWindow,
-            notificationContacts: notificationContacts
+            notificationContacts: notificationContacts,
+            monitoringPolicy: monitoringPolicy,
+            userPaused: resumePaused ? false : nil
         )
         restore()
     }
 
     func stop() throws {
+        // Persist the stop before cancelling an in-flight fix; its completion must
+        // not create a location-failure alert as a side effect of an intentional pause.
+        try store.configure(enabled: false, geofences: store.geofences, userPaused: true)
+        riskTimer?.invalidate()
+        riskTimer = nil
         stopMonitoring()
         try store.setMovementAnchor(nil)
         try store.setInactivity(GuardianInactivityState())
-        try store.configure(enabled: false, geofences: store.geofences)
         scheduleBackgroundCheck(after: Date())
     }
 
@@ -171,8 +191,54 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
     }
 
     func setNoMotionThresholdMinutes(_ value: Int) throws {
-        try store.setNoMotionThresholdMinutes(value)
-        evaluateInactivity(at: Date())
+        var policy = store.monitoringPolicy
+        policy.noMotionThresholdMinutes = value
+        guard let window = store.activeWindow else { throw GuardianCoreError.invalidConfiguration }
+        try setMonitoringPolicy(policy, activeWindow: window)
+    }
+
+    func clearLocalData() throws {
+        // Disable and erase atomically before cancellation invokes any callbacks.
+        try store.clearLocalData()
+        riskTimer?.invalidate()
+        riskTimer = nil
+        stopMonitoring()
+        geofencesById = [:]
+        lastActivityRecordAt = nil
+        finishRestoration(success: false)
+    }
+
+    func beginDataDeletion() throws {
+        try store.beginDataDeletion()
+        riskTimer?.invalidate()
+        riskTimer = nil
+        stopMonitoring()
+        finishRestoration(success: false)
+    }
+
+    private func validateStandardMode(geofences: [GuardianGeofence],
+                                      contacts: [GuardianNotificationContact]) throws {
+        guard geofences.contains(where: { $0.kind == "home" }), !contacts.isEmpty,
+              CLLocationManager.locationServicesEnabled(), authorization == .authorizedAlways,
+              accuracyAuthorization == .fullAccuracy,
+              UIApplication.shared.backgroundRefreshStatus == .available,
+              hasBackgroundMode
+        else { throw GuardianCoreError.invalidConfiguration }
+    }
+
+    func setMonitoringPolicy(_ policy: GuardianMonitoringPolicy,
+                             activeWindow: GuardianActiveWindow) throws {
+        try policy.validate()
+        if policy.mode == .standard && store.monitoringPolicy.mode != .standard {
+            try validateStandardMode(geofences: store.geofences, contacts: store.notificationContacts)
+            let registered = manager.monitoredRegions.compactMap { $0 as? CLCircularRegion }
+            guard store.geofences.allSatisfy({ fence in registered.contains(where: fence.matches) })
+            else { throw GuardianCoreError.invalidConfiguration }
+        }
+        let changed = policy != store.monitoringPolicy || activeWindow != store.activeWindow
+        try store.setMonitoringPolicy(policy, activeWindow: activeWindow)
+        guard changed else { return }
+        if store.enabled { restore(forceMotionHistoryReplay: true) }
         scheduleBackgroundCheck(after: Date())
     }
 
@@ -209,10 +275,25 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
         completion: ((Bool) -> Void)? = nil
     ) {
         if let completion { restorationObservers.append(completion) }
+        if store.dataDeletionPending {
+            stopMonitoring()
+            finishRestoration(success: false)
+            return
+        }
+        guard reconcileClock(at: Date()) else {
+            finishRestoration(success: false)
+            return
+        }
+        if store.enabled && riskTimer == nil {
+            riskTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+                self?.evaluateRisks(at: Date())
+            }
+        }
         guard store.enabled, authorization == .authorizedAlways,
               accuracyAuthorization == .fullAccuracy, hasBackgroundMode else {
             restorationSucceeded = false
             stopMonitoring()
+            evaluateRisks(at: Date())
             finishRestoration(success: false)
             return
         }
@@ -406,7 +487,10 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
         store.activeWindow?.contains(date) == true
     }
 
-    private func synchronizeActiveWindow(at date: Date, resetActivePeriod: Bool = false) {
+    private func synchronizeActiveWindow(at date: Date, resetActivePeriod: Bool = false,
+                                         trustedLocationAt: Date? = nil) {
+        defer { evaluateRisks(at: date, trustedLocationAt: trustedLocationAt,
+                              deferLocation: restorationLocationPending) }
         scheduleNextActiveWindowBoundary(after: date)
         guard isMonitoring, let activeWindow = store.activeWindow,
               activeWindow.contains(date),
@@ -441,19 +525,18 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
     }
 
     private func scheduleBackgroundCheck(after date: Date) {
-        guard store.enabled, isMonitoring, let activeWindow = store.activeWindow else {
+        guard store.enabled else {
             onBackgroundCheckNeeded?(nil)
             return
         }
-        let boundary = activeWindow.nextBoundary(after: date)
-        guard activeWindow.contains(date) else {
-            onBackgroundCheckNeeded?(boundary)
-            return
-        }
-        let inactivityDue = store.inactivity.nextEvaluationDate(
-            thresholdMinutes: store.noMotionThresholdMinutes
-        )
-        onBackgroundCheckNeeded?([boundary, inactivityDue].compactMap { $0 }.min())
+        let boundary = store.activeWindow?.nextBoundary(after: date)
+        let inactivityDue = isMonitoring && isWithinActiveWindow(at: date)
+            ? store.inactivity.nextEvaluationDate(thresholdMinutes: store.noMotionThresholdMinutes)
+            : nil
+        let locationDue = store.riskState.nextEvaluationDate(policy: store.monitoringPolicy, after: date)
+        // An opportunistic battery recheck, not a guaranteed periodic background timer.
+        onBackgroundCheckNeeded?([boundary, inactivityDue, locationDue, date.addingTimeInterval(15 * 60)]
+            .compactMap { $0 }.min())
     }
 
     private func beginOneShotLocation(
@@ -486,6 +569,7 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
         oneShotLocationObservers = []
         request?(result)
         let success = (try? result.get()) != nil
+        if !success { evaluateRisks(at: Date(), locationFailed: true) }
         observers.forEach { $0(success) }
     }
 
@@ -499,6 +583,7 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
             return
         }
         evaluateInactivity(at: Date())
+        evaluateRisks(at: Date())
         scheduleBackgroundCheck(after: Date())
         finishRestoration(success: restorationSucceeded)
     }
@@ -531,7 +616,8 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
         UIApplication.shared.endBackgroundTask(identifier)
     }
 
-    private func updateHomePresence(outsideHome: Bool, at date: Date) {
+    private func updateHomePresence(outsideHome: Bool, at date: Date, trustedLocationAt: Date? = nil) {
+        guard reconcileClock(at: Date()) else { return }
         guard !homeGeofences.isEmpty else { return }
         guard store.inactivity.lastTrustedLocationAt.map({ date >= $0 }) ?? true else { return }
         var state = store.inactivity
@@ -541,10 +627,10 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
         if returnedHome {
             let event = GuardianEvent(type: .returnHome, title: "回到家中", description: "定位已确认回到家的守护范围。",
                 timestamp: date, source: "location", location: previousLocation,
-                locationLabel: "家中")
+                locationLabel: "家中", isTest: store.monitoringPolicy.mode == .test)
             onEvent?(event)
         }
-        synchronizeActiveWindow(at: Date())
+        synchronizeActiveWindow(at: Date(), trustedLocationAt: trustedLocationAt)
         scheduleBackgroundCheck(after: Date())
     }
 
@@ -554,6 +640,7 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
         evidence: GuardianActivityEvidence,
         location: CLLocation? = nil
     ) -> Bool {
+        guard date <= Date().addingTimeInterval(5), reconcileClock(at: Date()) else { return false }
         guard isWithinActiveWindow(at: Date()) else {
             synchronizeActiveWindow(at: Date())
             return false
@@ -579,7 +666,8 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
                 source: evidence.source,
                 location: location,
                 batteryLevel: UIDevice.current.batteryLevel,
-                locationLabel: "家外"
+                locationLabel: "家外",
+                isTest: store.monitoringPolicy.mode == .test
             )
             guard persist(state, with: event) else { return false }
             lastActivityRecordAt = date
@@ -593,6 +681,7 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
     }
 
     private func evaluateInactivity(at date: Date) {
+        guard reconcileClock(at: date) else { return }
         guard isMonitoring, !homeGeofences.isEmpty else { return }
         guard isWithinActiveWindow(at: date) else {
             synchronizeActiveWindow(at: date)
@@ -613,7 +702,8 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
             source: "motion",
             location: riskLocation,
             batteryLevel: UIDevice.current.batteryLevel,
-            locationLabel: riskPlace
+            locationLabel: riskPlace,
+            isTest: store.monitoringPolicy.mode == .test
         )
         var criticalMessages = GuardianCriticalMessageOperation.prepare(
             for: event,
@@ -635,6 +725,49 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
               location.horizontalAccuracy.isFinite,
               (0...100).contains(location.horizontalAccuracy) else { return nil }
         return location
+    }
+
+    @objc private func handleRiskSignal() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.handleRiskSignal() }
+            return
+        }
+        evaluateRisks(at: Date())
+    }
+
+    private func evaluateRisks(at date: Date, trustedLocationAt: Date? = nil,
+                               locationFailed: Bool = false, deferLocation: Bool = false) {
+        guard store.enabled else { return }
+        let blocker: GuardianLocationRiskReason?
+        if !CLLocationManager.locationServicesEnabled() { blocker = .locationServicesDisabled }
+        else if authorization != .authorizedAlways { blocker = .locationPermissionDisabled }
+        else if accuracyAuthorization != .fullAccuracy { blocker = .preciseLocationDisabled }
+        else if UIApplication.shared.backgroundRefreshStatus != .available { blocker = .backgroundRefreshDisabled }
+        else { blocker = nil }
+        // Let a restore's fresh-fix attempt finish before judging an old GPS timestamp.
+        if (deferLocation || restorationLocationPending) && blocker == nil &&
+            trustedLocationAt == nil && !locationFailed { return }
+        let level = UIDevice.current.batteryLevel
+        let battery = level.isFinite && (0...1).contains(level) ? Int((level * 100).rounded()) : nil
+        let charging: Bool?
+        switch UIDevice.current.batteryState {
+        case .charging, .full: charging = true
+        case .unplugged: charging = false
+        default: charging = nil
+        }
+        let check = GuardianRiskCheck(date: date, enabled: store.enabled,
+            homePresence: store.inactivity.homePresence,
+            expectsLocation: store.inactivity.homePresence != .home && isWithinActiveWindow(at: date),
+            locationBlocker: blocker, batteryLevel: battery, isCharging: charging,
+            trustedLocationAt: trustedLocationAt, locationFailed: locationFailed,
+            activePeriodStart: store.activeWindow?.periodStart(containing: date))
+        do {
+            let context = restorationInProgress ? "restoration" :
+                (UIApplication.shared.applicationState == .background ? "background" : "foreground")
+            let events = try store.evaluateRisks(check, detectionContext: context)
+            events.forEach { onEvent?($0) }
+            scheduleBackgroundCheck(after: date)
+        } catch { onError?(error) }
     }
 
     private func guardianPlaceName(for location: CLLocation) -> String? {
@@ -696,7 +829,8 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
         // Fresh GPS wins over delayed/cached region state replies during restoration.
         if let location = previousLocation, GuardianLocationPolicy.accepts(location),
            let outside = homePosition(for: location) {
-            updateHomePresence(outsideHome: outside, at: location.timestamp)
+            updateHomePresence(outsideHome: outside, at: location.timestamp,
+                               trustedLocationAt: location.timestamp)
             return
         }
         let homeIds = Set(homeGeofences.map(\.id))
@@ -723,14 +857,31 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
         restore(forceMotionHistoryReplay: true)
     }
 
+    private func reconcileClock(at date: Date) -> Bool {
+        do {
+            _ = try store.reconcileClock(at: date)
+            previousLocation = GuardianLocationPolicy.chronologicalAnchor(previousLocation, now: date)
+            movementAnchor = GuardianLocationPolicy.chronologicalAnchor(movementAnchor, now: date)
+            if lastActivityRecordAt.map({ $0 > date.addingTimeInterval(5) }) == true {
+                lastActivityRecordAt = nil
+            }
+            return true
+        } catch {
+            onError?(error)
+            return false
+        }
+    }
+
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         let wasExplicitRequest = locationRequest != nil
         if oneShotLocationPending { finishOneShotLocation(.failure(error)) }
+        evaluateRisks(at: Date(), locationFailed: true)
         if wasExplicitRequest { return }
         onError?(error)
     }
 
     func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {
+        guard store.enabled else { return }
         onError?(error)
         monitoringRetry?.cancel()
         let retry = DispatchWorkItem { [weak self] in self?.restore(forceMotionHistoryReplay: true) }
@@ -786,10 +937,12 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
     }
 
     func locationManagerDidResumeLocationUpdates(_ manager: CLLocationManager) {
+        guard isMonitoring else { return }
         isReceivingStandardLocations = true
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard reconcileClock(at: Date()) else { return }
         let accepted = locations.filter { GuardianLocationPolicy.accepts($0) }
         if isMonitoring {
             for location in accepted.sorted(by: { $0.timestamp < $1.timestamp }) {
@@ -807,8 +960,12 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
                 }
                 previousLocation = location
                 if let outsideHome = homePosition(for: location) {
-                    updateHomePresence(outsideHome: outsideHome, at: location.timestamp)
+                    updateHomePresence(outsideHome: outsideHome, at: location.timestamp,
+                                       trustedLocationAt: location.timestamp)
                 }
+                // Apply the fix and home/away result together before judging either risk.
+                // Geofence callbacks never renew the trusted GPS timestamp.
+                evaluateRisks(at: Date(), trustedLocationAt: location.timestamp)
                 if let assessment, assessment.indicatesMovement {
                     _ = observeMovement(
                         at: location.timestamp,
@@ -826,7 +983,8 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
                     timestamp: location.timestamp,
                     source: "location",
                     location: location,
-                    batteryLevel: UIDevice.current.batteryLevel
+                    batteryLevel: UIDevice.current.batteryLevel,
+                    isTest: store.monitoringPolicy.mode == .test
                 )
                 onEvent?(event)
                 evaluateInactivity(at: Date())
@@ -848,7 +1006,9 @@ final class GuardianLocationService: NSObject, CLLocationManagerDelegate {
     private func emit(_ type: GuardianEventType, fence: GuardianGeofence, title: String) {
         // A boundary event identifies a region, not an exact GPS fix at its center.
         onEvent?(GuardianEvent(type: type, title: title, description: "\(title)的守护范围。", timestamp: Date(), source: "geofence",
-            batteryLevel: UIDevice.current.batteryLevel, geofenceId: fence.id, locationLabel: "\(fence.name)附近"))
+            batteryLevel: UIDevice.current.batteryLevel, geofenceId: fence.id, locationLabel: "\(fence.name)附近",
+            isTest: store.monitoringPolicy.mode == .test))
+        evaluateRisks(at: Date())
     }
 
 }

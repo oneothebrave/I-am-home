@@ -4,6 +4,8 @@ import CoreLocation
 enum GuardianEventType: String, Codable {
     case leaveHome = "LEAVE_HOME", enterWorkArea = "ENTER_WORK_AREA", exitWorkArea = "EXIT_WORK_AREA"
     case returnHome = "RETURN_HOME", longStay = "LONG_STAY", lowBattery = "LOW_BATTERY"
+    case batteryRecovered = "BATTERY_RECOVERED", locationRestored = "LOCATION_RESTORED"
+    case guardianSessionReset = "GUARDIAN_SESSION_RESET"
     case locationLost = "LOCATION_LOST", locationUpdated = "LOCATION_UPDATED"
     case enterWaypoint = "ENTER_WAYPOINT", exitWaypoint = "EXIT_WAYPOINT"
     case motionDetected = "MOTION_DETECTED", noMotionForLongTime = "NO_MOTION_FOR_LONG_TIME"
@@ -32,12 +34,15 @@ struct GuardianEvent: Codable {
     let batteryLevel: Int?
     let geofenceId: String?
     let locationLabel: String?
+    let isTest: Bool?
+    let riskReason: String?
 
     init(type: GuardianEventType, title: String, description: String, timestamp: Date, source: String,
-         location: CLLocation? = nil, batteryLevel: Float? = nil, geofenceId: String? = nil, locationLabel: String? = nil) {
+         location: CLLocation? = nil, batteryLevel: Float? = nil, geofenceId: String? = nil,
+         locationLabel: String? = nil, isTest: Bool = false, riskReason: String? = nil) {
         id = UUID().uuidString
         self.type = type
-        self.title = title
+        self.title = isTest ? "【测试】\(title)" : title
         self.description = description
         self.timestamp = timestamp
         receivedAt = Date()
@@ -46,6 +51,8 @@ struct GuardianEvent: Codable {
         self.batteryLevel = batteryLevel.flatMap { $0.isFinite && (0...1).contains($0) ? Int(($0 * 100).rounded()) : nil }
         self.geofenceId = geofenceId
         self.locationLabel = locationLabel
+        self.isTest = isTest
+        self.riskReason = riskReason
     }
 
     func toDictionary() -> [String: Any] {
@@ -61,6 +68,8 @@ struct GuardianEvent: Codable {
         if let batteryLevel { payload["batteryLevel"] = batteryLevel }
         if let geofenceId { payload["geofenceId"] = geofenceId }
         if let locationLabel { payload["locationLabel"] = locationLabel }
+        payload["isTest"] = isTest == true
+        if let riskReason { payload["riskReason"] = riskReason }
         return payload
     }
 }

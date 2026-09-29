@@ -79,6 +79,22 @@ struct GuardianInactivityState: Codable, Equatable {
     var lastTrustedLocationAt: Date?
     var alertEmittedAt: Date?
 
+    // Rebase elapsed-time anchors, but keep an existing alert unresolved until
+    // fresh movement/home evidence arrives. Never treat a clock change as safety.
+    @discardableResult
+    mutating func reconcileClock(at date: Date) -> Bool {
+        let future = date.addingTimeInterval(5)
+        guard [awaySince, lastMovementAt, lastTrustedLocationAt, alertEmittedAt]
+            .compactMap({ $0 }).contains(where: { $0 > future }) else { return false }
+        if homePresence == .away {
+            awaySince = date
+            lastMovementAt = date
+        }
+        if lastTrustedLocationAt.map({ $0 > future }) == true { lastTrustedLocationAt = nil }
+        if alertEmittedAt.map({ $0 > date }) == true { alertEmittedAt = date }
+        return true
+    }
+
     mutating func enterHome(at date: Date) {
         homePresence = .home
         awaySince = nil

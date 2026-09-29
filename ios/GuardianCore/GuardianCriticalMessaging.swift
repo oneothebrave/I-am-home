@@ -140,6 +140,7 @@ struct GuardianCriticalMessageOperation: Codable, Equatable {
     var shortcutOpenSucceeded: Bool?
     var shortcutAttemptError: String?
     var detectionContext: String?
+    var isTest: Bool?
 
     private enum CodingKeys: String, CodingKey {
         case id, eventId, contactId, contactName, phoneNumber, messageText, createdAt, status
@@ -147,6 +148,7 @@ struct GuardianCriticalMessageOperation: Codable, Equatable {
         case expiresAt, cooldownUntil, acceptedAt, sentAt, resolvedAt, lastErrorCode, lastError
         case shortcutAttemptPending, shortcutAttemptedAt, shortcutOpenSucceeded
         case shortcutAttemptError, detectionContext
+        case isTest
     }
 
     init(
@@ -207,6 +209,7 @@ struct GuardianCriticalMessageOperation: Codable, Equatable {
         shortcutOpenSucceeded = try container.decodeIfPresent(Bool.self, forKey: .shortcutOpenSucceeded)
         shortcutAttemptError = try container.decodeIfPresent(String.self, forKey: .shortcutAttemptError)
         detectionContext = try container.decodeIfPresent(String.self, forKey: .detectionContext)
+        isTest = try container.decodeIfPresent(Bool.self, forKey: .isTest)
         if nextAttemptAt == nil && status == .prepared { nextAttemptAt = createdAt }
         if acceptedAt != nil { status = .accepted }
     }
@@ -237,6 +240,7 @@ struct GuardianCriticalMessageOperation: Codable, Equatable {
         try container.encodeIfPresent(shortcutOpenSucceeded, forKey: .shortcutOpenSucceeded)
         try container.encodeIfPresent(shortcutAttemptError, forKey: .shortcutAttemptError)
         try container.encodeIfPresent(detectionContext, forKey: .detectionContext)
+        try container.encodeIfPresent(isTest, forKey: .isTest)
     }
 
     static func prepare(
@@ -252,9 +256,13 @@ struct GuardianCriticalMessageOperation: Codable, Equatable {
             "位置：\(locationDescription(for: event))"
         ]
         if let battery = event.batteryLevel { details.append("电量：\(battery)%") }
-        let message = "【到家了么】检测到被守护人的手机在家外已连续约\(thresholdMinutes)分钟没有明显活动。\(details.joined(separator: "，"))。请尽快联系确认。"
+        let summary = event.type == .noMotionForLongTime
+            ? "检测到被守护人的手机在家外已连续约\(thresholdMinutes)分钟没有明显活动。"
+            : event.description
+        let prefix = event.isTest == true ? "【到家了么·测试，不代表真实求助】" : "【到家了么】"
+        let message = "\(prefix)\(summary)\(details.joined(separator: "，"))。请联系确认。"
         return contacts.sorted(by: { $0.priority < $1.priority }).map { contact in
-            GuardianCriticalMessageOperation(
+            var operation = GuardianCriticalMessageOperation(
                 id: "\(event.id):\(contact.id)",
                 eventId: event.id,
                 contactId: contact.id,
@@ -263,6 +271,14 @@ struct GuardianCriticalMessageOperation: Codable, Equatable {
                 messageText: message,
                 createdAt: event.timestamp
             )
+            operation.isTest = event.isTest == true
+            if operation.isTest == true {
+                operation.status = .restricted
+                operation.nextAttemptAt = nil
+                operation.lastErrorCode = "testMode"
+                operation.lastError = "测试告警仅保存在本机，不会自动发送短信。"
+            }
+            return operation
         }
     }
 
@@ -272,7 +288,7 @@ struct GuardianCriticalMessageOperation: Codable, Equatable {
             genericLabels.contains($0) ? nil : $0
         }
         guard let location = event.location else {
-            return namedPlace ?? "守护地点外（具体位置暂无法确认）"
+            return namedPlace ?? "具体位置暂无法确认"
         }
         let coordinate = String(
             format: "纬度 %.5f，经度 %.5f",
@@ -307,6 +323,7 @@ struct GuardianCriticalMessageOperation: Codable, Equatable {
             "expiresAt": Self.dateString(expiresAt),
             "shortcutAttemptPending": shortcutAttemptPending == true
         ]
+        payload["isTest"] = isTest == true
         if let lastAttemptAt { payload["lastAttemptAt"] = Self.dateString(lastAttemptAt) }
         if let nextAttemptAt { payload["nextAttemptAt"] = Self.dateString(nextAttemptAt) }
         if let cooldownUntil { payload["cooldownUntil"] = Self.dateString(cooldownUntil) }
@@ -322,6 +339,21 @@ struct GuardianCriticalMessageOperation: Codable, Equatable {
         if let shortcutAttemptError { payload["shortcutAttemptError"] = shortcutAttemptError }
         if let detectionContext { payload["detectionContext"] = detectionContext }
         return payload
+    }
+}
+
+// Only transport errors are send failures. A result-write error must propagate
+// without a second completion that could schedule a duplicate SMS.
+enum GuardianCriticalMessageAttempt {
+    @MainActor
+    static func perform(
+        send: () async throws -> Bool,
+        complete: (Result<Bool, Error>) throws -> Void
+    ) async throws {
+        let result: Result<Bool, Error>
+        do { result = .success(try await send()) }
+        catch { result = .failure(error) }
+        try complete(result)
     }
 }
 
@@ -378,6 +410,7 @@ final class GuardianCriticalMessagingGateway {
 final class GuardianCriticalMessagingCoordinator {
     private let store: GuardianEventStore
     private var processingTask: Task<Void, Never>?
+    private var generation = 0
     var onUpdate: (() -> Void)?
     var onNextActionDate: ((Date?) -> Void)?
 
@@ -385,7 +418,15 @@ final class GuardianCriticalMessagingCoordinator {
         self.store = store
     }
 
+    func cancelPendingWork() {
+        generation += 1
+        processingTask?.cancel()
+        processingTask = nil
+        onNextActionDate?(nil)
+    }
+
     func process(reason: String) async {
+        let epoch = generation
         if let processingTask {
             await processingTask.value
             return
@@ -396,10 +437,12 @@ final class GuardianCriticalMessagingCoordinator {
         }
         processingTask = task
         await task.value
-        processingTask = nil
+        if epoch == generation { processingTask = nil }
     }
 
     func requestAuthorization() async throws {
+        guard !store.dataDeletionPending else { throw GuardianCoreError.invalidConfiguration }
+        let epoch = generation
         guard GuardianCriticalMessagingCapability.apiAvailable else {
             throw GuardianCoreError.criticalMessagingUnavailable("当前 iOS 版本不支持 Apple 关键短信。")
         }
@@ -412,12 +455,15 @@ final class GuardianCriticalMessagingCoordinator {
         }
         guard #available(iOS 18.2, *) else { return }
         let result = try await GuardianCriticalMessagingGateway().requestAuthorization(for: contacts)
+        guard epoch == generation else { return }
         try store.updateCriticalMessagingAuthorizations(result)
         onUpdate?()
         await process(reason: "authorization-request")
     }
 
     func refreshAuthorization() async throws {
+        guard !store.dataDeletionPending else { return }
+        let epoch = generation
         guard GuardianCriticalMessagingCapability.apiAvailable,
               GuardianCriticalMessagingCapability.enabledForBuild,
               !store.notificationContacts.isEmpty,
@@ -425,11 +471,13 @@ final class GuardianCriticalMessagingCoordinator {
         let result = try await GuardianCriticalMessagingGateway().checkAuthorization(
             for: store.notificationContacts
         )
+        guard epoch == generation else { return }
         try store.updateCriticalMessagingAuthorizations(result)
         onUpdate?()
     }
 
     var readiness: String {
+        guard store.monitoringPolicy.mode == .standard else { return "testMode" }
         guard !store.notificationContacts.isEmpty else { return "noRecipients" }
         guard GuardianCriticalMessagingCapability.apiAvailable else { return "apiUnavailable" }
         guard GuardianCriticalMessagingCapability.enabledForBuild else { return "buildNotConfigured" }
@@ -444,8 +492,16 @@ final class GuardianCriticalMessagingCoordinator {
 
     @MainActor
     private func runProcess(reason: String) async {
+        let epoch = generation
+        guard !Task.isCancelled, !store.dataDeletionPending else { return }
         do {
             _ = try store.reconcileCriticalMessages()
+            guard store.monitoringPolicy.mode == .standard else {
+                try store.setCriticalMessagingUnavailable(code: "testMode",
+                    message: "测试告警仅保存在本机，不会自动发送短信。")
+                publishSchedule()
+                return
+            }
             guard !store.criticalMessageOperations.isEmpty else {
                 publishSchedule()
                 return
@@ -469,6 +525,7 @@ final class GuardianCriticalMessagingCoordinator {
             guard #available(iOS 18.2, *) else { return }
             let gateway = GuardianCriticalMessagingGateway()
             let authorization = try await gateway.checkAuthorization(for: store.notificationContacts)
+            guard epoch == generation, !Task.isCancelled else { return }
             try store.updateCriticalMessagingAuthorizations(authorization)
 
             // Apple only supports send(_:to:) while the app is backgrounded.
@@ -478,29 +535,31 @@ final class GuardianCriticalMessagingCoordinator {
             }
 
             for candidate in store.readyCriticalMessageOperations() {
+                guard epoch == generation, !Task.isCancelled else { return }
                 guard let operation = try store.beginCriticalMessageAttempt(id: candidate.id) else { continue }
-                do {
-                    let accepted = try await gateway.send(operation)
-                    try store.completeCriticalMessageAttempt(
-                        id: operation.id,
-                        accepted: accepted,
-                        errorCode: accepted ? nil : "sendRejected",
-                        errorMessage: accepted ? nil : "系统没有接受这次关键短信发送请求。",
-                        retryable: !accepted
-                    )
-                } catch {
-                    let classification = Self.classify(error)
-                    try store.completeCriticalMessageAttempt(
-                        id: operation.id,
-                        accepted: false,
-                        errorCode: classification.code,
-                        errorMessage: classification.message,
-                        retryable: classification.retryable
-                    )
-                }
+                try await GuardianCriticalMessageAttempt.perform(send: {
+                    try await gateway.send(operation)
+                }, complete: { result in
+                    guard epoch == generation, !Task.isCancelled else { return }
+                    switch result {
+                    case .success(let accepted):
+                        try store.completeCriticalMessageAttempt(
+                            id: operation.id, accepted: accepted,
+                            errorCode: accepted ? nil : "sendRejected",
+                            errorMessage: accepted ? nil : "系统没有接受这次关键短信发送请求。",
+                            retryable: !accepted)
+                    case .failure(let error):
+                        let classification = Self.classify(error)
+                        try store.completeCriticalMessageAttempt(
+                            id: operation.id, accepted: false,
+                            errorCode: classification.code, errorMessage: classification.message,
+                            retryable: classification.retryable)
+                    }
+                })
             }
             publishSchedule()
         } catch {
+            guard epoch == generation, !Task.isCancelled else { return }
             NSLog("Critical Messaging processing failed (%@): %@", reason, String(describing: error))
             onUpdate?()
             publishSchedule()

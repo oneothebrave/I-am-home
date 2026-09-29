@@ -37,6 +37,7 @@ export type CriticalMessageOperation = {
   lastErrorCode?: string;
   lastError?: string;
   shortcutAttemptPending: boolean;
+  isTest?: boolean;
   shortcutAttemptedAt?: string;
   shortcutOpenSucceeded?: boolean;
   shortcutAttemptError?: string;
@@ -58,6 +59,7 @@ export type CriticalMessagingPolicy = {
 };
 
 export type CriticalMessagingReadiness =
+  | 'testMode'
   | 'ready'
   | 'noRecipients'
   | 'apiUnavailable'
@@ -92,6 +94,7 @@ export function parseCriticalMessagingPreparation(
     typeof value.automaticSendingEnabled !== 'boolean' ||
     typeof value.requiresBackgroundExecution !== 'boolean' ||
     ![
+      'testMode',
       'ready',
       'noRecipients',
       'apiUnavailable',
@@ -177,6 +180,7 @@ export function parseCriticalMessagingPreparation(
       !Number.isInteger(operation.attemptCount) ||
       !isTimestamp(operation.expiresAt) ||
       typeof operation.shortcutAttemptPending !== 'boolean' ||
+      (operation.isTest !== undefined && typeof operation.isTest !== 'boolean') ||
       (operation.lastAttemptAt !== undefined && !isTimestamp(operation.lastAttemptAt)) ||
       (operation.nextAttemptAt !== undefined && !isTimestamp(operation.nextAttemptAt)) ||
       (operation.cooldownUntil !== undefined && !isTimestamp(operation.cooldownUntil)) ||

@@ -36,7 +36,7 @@ export function startGuardianGeofenceSync(
             lastError = undefined;
           } catch (error) {
             lastError = error;
-            onError(error);
+            if (!stopped) onError(error);
             if (!desired) break;
           } finally {
             activeKey = undefined;
@@ -58,7 +58,7 @@ export function startGuardianGeofenceSync(
       if (
         desired?.key === key ||
         (!desired && activeKey === key) ||
-        (!desired && !lastError && lastSyncedKey === key)
+        (!desired && !activeKey && !lastError && lastSyncedKey === key)
       )
         return;
       desired = { geofences: next, key };

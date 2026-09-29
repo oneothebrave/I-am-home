@@ -3,9 +3,7 @@ const assert = require('node:assert/strict');
 const { createLoader } = require('./loadTs.cjs');
 const load = createLoader();
 const { buildGuardianSnapshot } = load('src/domain/riskEngine.ts');
-const { getEscalationState } = load('src/domain/escalation.ts');
 const { guardianConfig: config, createDemoEvents } = load('src/domain/mockData.ts');
-const { summarizeRiskReason } = load('src/domain/guardianRules.ts');
 const { isWithinGuardianWindow } = load('src/domain/guardianSchedule.ts');
 const now = Date.parse('2026-09-08T08:30:00Z');
 const event = (type, index, fields = {}) => ({
@@ -21,8 +19,6 @@ const risk = event('LOCATION_LOST', 1);
 const prompt = event('SAFETY_CHECK_REQUESTED', 2, { incidentId: risk.id });
 const notified = event('FAMILY_NOTIFIED', 3, { incidentId: risk.id, contactId: 'contact-1' });
 const snapshot = (events) => buildGuardianSnapshot(events, { now });
-const escalation = (events, cfg = config, options = {}) =>
-  getEscalationState(snapshot(events), cfg, { now, simulate: true, ...options });
 
 test('single guardian window includes its start and excludes its end', () => {
   const schedule = config.schedule;
@@ -56,70 +52,48 @@ test('confirmation resolves SOS and passive risks', () => {
     assert.equal(snapshot([event(type, 1), event('USER_CONFIRMED_SAFE', 2)]).status, 'safe');
   }
 });
-test('R02: SOS enters family queue both with and without an existing passive risk', () => {
+test('R02: SOS replaces a passive risk with its own incident', () => {
   for (const events of [
     [event('USER_CONFIRMED_SAFE', 1), event('SOS_SENT', 2)],
     [risk, event('SOS_SENT', 2)],
   ]) {
-    assert.equal(escalation(events).phase, 'family_queue');
+    assert.equal(snapshot(events).incident.kind, 'sos');
+    assert.equal(snapshot(events).incident.id, 'e2');
   }
 });
-test('SOS after a previously notified passive alert starts a fresh notification queue', () => {
-  const result = escalation([risk, prompt, notified, event('SOS_SENT', 4)]);
-  assert.equal(result.phase, 'family_queue');
-  assert.equal(result.nextContact.id, 'contact-1');
-  assert.equal(result.notifiedCount, 0);
+test('SOS after a previously notified passive alert does not inherit its receipts', () => {
+  const result = snapshot([risk, prompt, notified, event('SOS_SENT', 4)]).incident;
+  assert.equal(result.kind, 'sos');
+  assert.deepEqual(result.notifiedContactIds, []);
 });
-test('manual progression notifies family directly and reaches a terminal state', () => {
-  let events = [risk];
-  for (const type of ['FAMILY_NOTIFIED', 'FAMILY_NOTIFIED', 'ESCALATION_FINISHED']) {
-    const next = escalation(events).nextEvent;
-    assert.equal(next.type, type);
-    events.push(event(type, events.length + 1, next));
-  }
-  assert.equal(escalation(events).phase, 'completed');
-  assert.equal(escalation(events).nextEvent, undefined);
-});
-test('R03: removing a notified contact does not skip another recipient', () => {
-  const result = escalation([risk, prompt, notified], {
-    ...config,
-    contacts: [config.contacts[1]],
-  });
-  assert.equal(result.nextContact.id, 'contact-2');
-  assert.equal(result.notifiedCount, 1);
+test('legacy escalation completion preserves the unresolved risk', () => {
+  const result = snapshot([risk, notified,
+    event('ESCALATION_FINISHED', 4, { incidentId: risk.id })]);
+  assert.equal(result.incident.completed, true);
+  assert.equal(result.status, 'emergency');
 });
 test('R03: repeated IDs and repeated delivery receipts do not consume recipients', () => {
   for (const repeat of [notified, { ...notified, id: 'another-receipt' }]) {
-    assert.equal(escalation([risk, prompt, notified, repeat]).nextContact.id, 'contact-2');
+    assert.deepEqual(snapshot([risk, prompt, notified, repeat]).incident.notifiedContactIds, ['contact-1']);
   }
-});
-test('reordered contact array still respects priorities', () => {
-  assert.equal(
-    escalation([risk, prompt], { ...config, contacts: [...config.contacts].reverse() }).nextContact
-      .id,
-    'contact-1',
-  );
-});
-test('R04: empty contacts block notification and never claim completion', () => {
-  assert.equal(escalation([risk, prompt], { ...config, contacts: [] }).phase, 'blocked');
 });
 test('late receipts and unknown legacy recipients cannot advance a new incident', () => {
   const current = event('LOCATION_LOST', 5);
   assert.equal(
-    escalation([
+    snapshot([
       risk,
       event('USER_CONFIRMED_SAFE', 4),
       current,
       { ...notified, timestamp: event('FAMILY_NOTIFIED', 6).timestamp },
-    ]).notifiedCount,
+    ]).incident.notifiedContactIds.length,
     0,
   );
-  assert.equal(escalation([risk, prompt, { ...notified, contactId: undefined }]).notifiedCount, 0);
+  assert.equal(snapshot([risk, prompt, { ...notified, contactId: undefined }]).incident.notifiedContactIds.length, 0);
 });
-test('failed delivery retries the same contact; acknowledgement preserves the alert', () => {
+test('legacy failed delivery does not count as notification; acknowledgement preserves the alert', () => {
   assert.equal(
-    escalation([risk, prompt, { ...notified, type: 'FAMILY_NOTIFICATION_FAILED' }]).nextContact.id,
-    'contact-1',
+    snapshot([risk, prompt, { ...notified, type: 'FAMILY_NOTIFICATION_FAILED' }]).incident.notifiedContactIds.length,
+    0,
   );
   const events = [
     risk,
@@ -127,21 +101,15 @@ test('failed delivery retries the same contact; acknowledgement preserves the al
     notified,
     event('FAMILY_ACKNOWLEDGED', 4, { incidentId: risk.id, contactId: 'contact-1' }),
   ];
-  assert.equal(escalation(events).phase, 'acknowledged');
+  assert.equal(snapshot(events).incident.acknowledgedBy, 'contact-1');
   assert.equal(snapshot(events).status, 'emergency');
 });
-test('live family queue has no self-confirmation escalation delay and fabricates no sent events', () => {
-  assert.equal(escalation([risk], config, { simulate: false }).phase, 'family_queue');
-  const next = escalation([risk, notified], config, { simulate: false });
-  assert.equal(next.phase, 'family_queue');
-  assert.equal(next.nextEvent, undefined);
-});
-test('no-motion risk goes directly to the family queue without a self prompt', () => {
+test('no-motion snapshot creates neither self prompts nor fabricated notification receipts', () => {
   const noMotion = event('NO_MOTION_FOR_LONG_TIME', 1, { source: 'motion' });
-  const result = escalation([noMotion]);
-  assert.equal(result.phase, 'family_queue');
-  assert.equal(result.nextEvent.type, 'FAMILY_NOTIFIED');
-  assert.doesNotMatch(result.title, /本人/);
+  const result = snapshot([noMotion]).incident;
+  assert.equal(result.trigger.type, 'NO_MOTION_FOR_LONG_TIME');
+  assert.equal(result.selfPromptAt, undefined);
+  assert.deepEqual(result.notifiedContactIds, []);
 });
 test('R08: location and battery are preserved across unrelated events', () => {
   const result = snapshot([
@@ -153,10 +121,8 @@ test('R08: location and battery are preserved across unrelated events', () => {
 });
 test('R08: resolved historical reasons do not reappear after leaving home', () => {
   assert.ok(
-    !summarizeRiskReason(
-      [risk, event('USER_CONFIRMED_SAFE', 2), event('LEAVE_HOME', 3)],
-      now,
-    ).includes('LOCATION_LOST'),
+    !(snapshot([risk, event('USER_CONFIRMED_SAFE', 2), event('LEAVE_HOME', 3)])
+      .riskReason ?? '').includes('LOCATION_LOST'),
   );
 });
 test('motion cannot resolve a low-battery or missing-location risk', () => {

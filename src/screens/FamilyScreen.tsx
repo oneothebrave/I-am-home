@@ -11,6 +11,7 @@ function latestOperationLabel(
   operation: CriticalMessagingPreparation['operations'][number] | undefined,
 ) {
   if (!operation) return '暂无告警';
+  if (operation.isTest) return '最近：测试告警，仅本机记录';
   switch (operation.status) {
     case 'prepared':
       return '最近：等待后台发送';

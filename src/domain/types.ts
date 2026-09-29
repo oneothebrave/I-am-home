@@ -7,7 +7,10 @@ export type GuardianEventType =
   | 'RETURN_HOME'
   | 'LONG_STAY'
   | 'LOW_BATTERY'
+  | 'BATTERY_RECOVERED'
   | 'LOCATION_LOST'
+  | 'LOCATION_RESTORED'
+  | 'GUARDIAN_SESSION_RESET'
   | 'LOCATION_UPDATED'
   | 'ENTER_WAYPOINT'
   | 'EXIT_WAYPOINT'
@@ -54,6 +57,8 @@ export interface GuardianEvent {
   incidentId?: string;
   contactId?: string;
   simulated?: boolean;
+  isTest?: boolean;
+  riskReason?: string;
 }
 
 export type GuardianEventDraft = Omit<GuardianEvent, 'id' | 'timestamp'>;
@@ -88,6 +93,8 @@ export interface GuardianContact {
 }
 
 export interface GuardianSchedule {
+  monitoringMode: 'standard' | 'test';
+  locationLostThresholdMinutes: number;
   startTime: string;
   expectedReturnTime: string;
   noMotionThresholdMinutes: number;
@@ -102,6 +109,7 @@ export interface GuardianConfig {
 
 export interface GuardianStatusSnapshot {
   status: GuardianStatus;
+  clockUncertain?: boolean;
   headline: string;
   detail: string;
   lastSafeSignal: string;

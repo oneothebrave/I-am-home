@@ -4,6 +4,7 @@ import { createId } from '../utils/id';
 import type { GuardianRepository } from '../storage/guardianRepository';
 import { createInitialStoredState, type GuardianStoredState } from '../storage/guardianSchema';
 import { guardianReducer, type GuardianAction } from './guardianReducer';
+import { retainGuardianEvents } from '../domain/dataRetention';
 
 export interface GuardianViewState {
   data: GuardianStoredState;
@@ -27,6 +28,7 @@ export function createGuardianStore(repository: GuardianRepository, clock = Date
   let saving: Promise<void> | undefined;
   let processedRevision = 0;
   let retryRequested = false;
+  let clearing = false;
   const message = (error: unknown) =>
     error instanceof Error ? error.message : '操作失败，请重试。';
   const publish = (patch: Partial<GuardianViewState>) => {
@@ -80,9 +82,12 @@ export function createGuardianStore(repository: GuardianRepository, clock = Date
   }
 
   function dispatch(action: GuardianAction) {
+    if (clearing || view.data.dataDeletionPending) return false;
     if (view.loadStatus !== 'ready' && action.type !== 'events') return false;
     if (view.loadStatus !== 'ready') pending.push(action);
-    const data = guardianReducer(view.data, action);
+    let data = guardianReducer(view.data, action);
+    if (data !== view.data && data.mode === 'device')
+      data = { ...data, localEvents: retainGuardianEvents(data.localEvents, clock()) };
     if (data !== view.data) {
       publish({
         data,
@@ -102,20 +107,24 @@ export function createGuardianStore(repository: GuardianRepository, clock = Date
       .loadState()
       .then((data) => {
         const hadPending = pending.length > 0;
-        for (const action of pending) data = guardianReducer(data, action);
+        if (!data.dataDeletionPending)
+          for (const action of pending) data = guardianReducer(data, action);
         pending = [];
+        const retained = data.mode === 'device' ? retainGuardianEvents(data.localEvents, clock()) : data.localEvents;
+        const pruned = retained.length !== data.localEvents.length;
+        data = { ...data, localEvents: retained };
         const status = repository.getStatus();
         processedRevision = 0;
         publish({
           data,
           loadStatus: 'ready',
-          revision: hadPending ? 1 : 0,
+          revision: hadPending || pruned ? 1 : 0,
           saveStatus: status.hasStoredState ? status.durability : 'idle',
           savedAt:
             status.hasStoredState && status.durability === 'durable' ? data.updatedAt : undefined,
           error: status.error,
         });
-        if (hadPending) void persist();
+        if (hadPending || pruned) void persist();
       })
       .catch((error) => {
         publish({ loadStatus: 'error', saveStatus: 'error', error: message(error) });
@@ -163,18 +172,63 @@ export function createGuardianStore(repository: GuardianRepository, clock = Date
       return event;
     },
     async importEvents(rawEvents: unknown[]) {
+      if (clearing || view.data.dataDeletionPending) return false;
       const events = rawEvents.map(parseGuardianEvent);
       if (view.loadStatus !== 'ready') await initialize();
       if (view.loadStatus !== 'ready' || view.data.mode !== 'device') return false;
-      dispatch({ type: 'events', events });
+      if (!dispatch({ type: 'events', events })) return false;
       retryRequested = true;
       await flush();
-      return view.saveStatus === 'durable';
+      return !clearing && !view.data.dataDeletionPending && view.saveStatus === 'durable';
+    },
+    pruneHistory() {
+      if (view.loadStatus !== 'ready' || view.data.mode !== 'device' || clearing || view.data.dataDeletionPending) return;
+      const events = retainGuardianEvents(view.data.localEvents, clock());
+      if (events.length !== view.data.localEvents.length)
+        dispatch({ type: 'reset', data: { ...view.data, localEvents: events } });
+    },
+    requireDataDeletion() {
+      return dispatch({ type: 'reset', data: {
+        ...createInitialStoredState(clock(), 'device'), isGuardianPaused: true, dataDeletionPending: true,
+      } });
+    },
+    async clearLocalData(clearNative: () => Promise<void>, prepareNative = async () => {}) {
+      if (clearing) throw new Error('正在清除本机数据，请稍候。');
+      clearing = true;
+      try {
+        if (loading) await loading;
+        // Finish any pre-delete write before committing the empty deletion journal.
+        if (saving) await saving;
+        pending = [];
+        retryRequested = false;
+        const empty = { ...createInitialStoredState(clock(), 'device'), isGuardianPaused: true };
+        const journal = { ...empty, dataDeletionPending: true };
+        const revision = view.revision + 1;
+        processedRevision = revision;
+        publish({ data: journal, loadStatus: 'ready', revision, saveStatus: 'saving', error: undefined });
+        // A native tombstone must precede deleting JS state: native bootstrap
+        // runs before React and must not resume monitoring after an interrupted wipe.
+        await prepareNative();
+        await repository.saveState(journal);
+        if (repository.getStatus().durability !== 'durable')
+          throw new Error('清除进度尚未可靠保存，旧数据可能仍在本机，请重试。');
+        await clearNative();
+        await repository.saveState(empty);
+        if (repository.getStatus().durability !== 'durable')
+          throw new Error('清除结果尚未可靠保存，请重试完成清除。');
+        publish({ data: empty, saveStatus: 'durable', savedAt: empty.updatedAt, error: undefined });
+      } catch (error) {
+        publish({ saveStatus: 'error', error: message(error) });
+        throw error;
+      } finally {
+        clearing = false;
+      }
     },
     reset() {
       return dispatch({ type: 'reset', data: createInitialStoredState(clock(), view.data.mode) });
     },
     async retry() {
+      if (clearing || view.data.dataDeletionPending) return;
       if (view.loadStatus !== 'ready') await initialize();
       else {
         retryRequested = true;

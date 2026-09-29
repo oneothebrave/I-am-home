@@ -140,20 +140,24 @@ function newestEvent(events: GuardianEvent[], predicate: (event: GuardianEvent) 
     .sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp))[0];
 }
 
-function recoveryForRisk(risk: GuardianEvent | undefined, events: GuardianEvent[]) {
+function recoveryForRisk(risk: GuardianEvent | undefined, events: GuardianEvent[], now: number) {
   if (!risk) return undefined;
   const riskAt = Date.parse(risk.timestamp);
   return events
-    .filter((event) => Date.parse(event.timestamp) > riskAt)
+    .filter((event) => Date.parse(event.timestamp) > riskAt && Date.parse(event.timestamp) <= now)
     .filter((event) => {
-      if (event.type === 'RETURN_HOME') return true;
+      if (risk.type === 'SOS_SENT') return event.type === 'USER_CONFIRMED_SAFE';
+      if (event.type === 'GUARDIAN_SESSION_RESET') return true;
+      if (event.type === 'RETURN_HOME' && risk.type !== 'LOCATION_LOST') return true;
       if (risk.type === 'NO_MOTION_FOR_LONG_TIME' || risk.type === 'LONG_STAY')
         return event.type === 'MOTION_DETECTED';
       if (risk.type === 'LOCATION_LOST')
-        return event.type === 'LOCATION_UPDATED' ||
-          (event.type === 'MOTION_DETECTED' && event.source === 'location');
+        return event.type === 'LOCATION_RESTORED' || (!risk.riskReason &&
+          (event.type === 'LOCATION_UPDATED' ||
+          (event.type === 'MOTION_DETECTED' && event.source === 'location')));
       if (risk.type === 'LOW_BATTERY')
-        return event.batteryLevel !== undefined && event.batteryLevel >= 20;
+        return event.type === 'BATTERY_RECOVERED' ||
+          (event.batteryLevel !== undefined && event.batteryLevel >= 20);
       return false;
     })
     .sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp))[0];
@@ -161,6 +165,7 @@ function recoveryForRisk(risk: GuardianEvent | undefined, events: GuardianEvent[
 
 function messagingStatus(preparation: CriticalMessagingPreparation | undefined) {
   const operation = preparation?.operations.at(-1);
+  if (operation?.isTest) return '测试告警仅保存在本机，不会自动发送';
   if (!operation)
     return preparation?.recipients.length
       ? `已设置 ${preparation.recipients.length} 位家人，暂无待发送告警`
@@ -187,6 +192,8 @@ function detectionContext(preparation: CriticalMessagingPreparation | undefined)
 
 export function guardianDiagnosticsSummary(input: GuardianDiagnosticsInput) {
   if (input.mode === 'demo') return { title: '尚未启用真机守护', value: '未启用' };
+  if (input.events.some((event) => Date.parse(event.timestamp) > input.now + 5_000))
+    return { title: '设备时间需要确认', value: '需要检查' };
   if (!input.status || !input.permissions)
     return { title: '正在检查守护链路', value: '正在检查' };
   const ready =
@@ -276,7 +283,7 @@ export function buildGuardianRecentConfirmation(input: GuardianDiagnosticsInput)
       tone: 'default',
     });
   }
-  return candidates.sort((left, right) => right.at - left.at)[0];
+  return candidates.filter((item) => item.at <= input.now).sort((left, right) => right.at - left.at)[0];
 }
 
 export function buildGuardianTodayTimeline(input: GuardianDiagnosticsInput) {
@@ -418,7 +425,7 @@ export function buildGuardianLatestRiskTimeline(input: GuardianDiagnosticsInput)
       });
     }
   }
-  const recovery = recoveryForRisk(risk, input.events);
+  const recovery = recoveryForRisk(risk, input.events, input.now);
   const recoveryAt = timestamp(recovery?.timestamp);
   if (recovery && recoveryAt !== undefined) {
     items.push({
@@ -432,181 +439,104 @@ export function buildGuardianLatestRiskTimeline(input: GuardianDiagnosticsInput)
   return items.sort((left, right) => left.at - right.at);
 }
 
-export function buildGuardianDiagnosticSections(
-  input: GuardianDiagnosticsInput,
-): DiagnosticSection[] {
-  const reliability = input.status?.reliability;
-  const lastLocationEvent = newestEvent(
-    input.events,
-    (event) => event.source === 'location' && event.location !== undefined,
-  );
-  const currentLocationAt = timestamp(input.currentLocation?.timestamp) ?? 0;
-  const eventLocationAt = timestamp(lastLocationEvent?.timestamp) ?? 0;
-  const locationSource = currentLocationAt >= eventLocationAt && input.currentLocation
-    ? {
-        timestamp: input.currentLocation.timestamp,
-        accuracy: input.currentLocation.accuracy,
-      }
-    : lastLocationEvent
-      ? {
-          timestamp: lastLocationEvent.timestamp,
-          accuracy: lastLocationEvent.location?.accuracy,
-        }
-      : undefined;
-  const lastActivity = newestEvent(input.events, (event) => event.type === 'MOTION_DETECTED');
-  const lastRisk = newestEvent(input.events, (event) => riskTypes.has(event.type));
-  const recovery = recoveryForRisk(lastRisk, input.events);
-  const wakeReason = reliability?.lastWakeReason
-    ? wakeReasonLabels[reliability.lastWakeReason] ?? reliability.lastWakeReason
-    : '暂无记录';
-  const criticalCapability = input.criticalMessaging?.buildConfigured
-    ? '工程已配置'
-    : input.criticalMessaging?.apiAvailable
-      ? '系统支持，工程尚未启用'
-      : '当前系统或工程不可用';
-
-  return [
-    {
-      title: '守护运行',
-      rows: [
-        {
-          label: '自动守护',
-          value: input.mode === 'demo'
-            ? '演示模式'
-            : input.status?.isGuardianOn
-              ? '已开启'
-              : input.status
-                ? '未开启'
-                : '正在读取',
-        },
-        {
-          label: '原生监听',
-          value: input.status?.isMonitoring ? '正在运行' : input.status ? '未运行' : '正在读取',
-        },
-        {
-          label: '守护时段',
-          value: input.status?.isInActiveWindow ? '当前在时段内' : input.status ? '当前在时段外' : '正在读取',
-        },
-        {
-          label: '守护地点',
-          value: `${input.geofenceCount} 个 · ${geofenceSyncLabels[input.geofenceSyncStatus]}`,
-        },
-        {
-          label: '待同步事件',
-          value: input.status ? `${input.status.pendingEventCount} 条` : '正在读取',
-        },
-        ...(input.status?.lastError
-          ? [{ label: '最近原生错误', value: input.status.lastError }]
-          : []),
-      ],
-    },
-    {
-      title: '权限状态',
-      rows: [
-        {
-          label: '定位',
-          value: input.permissions ? locationPermissionLabels[input.permissions.location] : '正在读取',
-        },
-        {
-          label: '位置精度',
-          value: input.permissions ? accuracyLabels[input.permissions.locationAccuracy] : '正在读取',
-        },
-        {
-          label: '运动与健身',
-          value: input.permissions ? motionLabels[input.permissions.motion] : '正在读取',
-        },
-        {
-          label: '后台 App 刷新',
-          value: input.permissions
-            ? backgroundRefreshLabels[input.permissions.backgroundRefresh]
-            : '正在读取',
-        },
-      ],
-    },
-    {
-      title: '后台恢复',
-      rows: [
-        {
-          label: '最近系统唤醒',
-          value: reliability?.lastWakeAt
-            ? `${formatDiagnosticTime(reliability.lastWakeAt, input.now)} · ${wakeReason}`
-            : '暂无记录',
-        },
-        {
-          label: '最近恢复结果',
-          value: reliability?.lastRestoreAt
-            ? `${formatDiagnosticTime(reliability.lastRestoreAt, input.now)} · ${reliability.lastRestoreSucceeded ? '成功' : '未成功'}`
-            : '暂无记录',
-        },
-        {
-          label: '最近后台检查',
-          value: formatDiagnosticTime(reliability?.lastBackgroundCheckAt, input.now),
-        },
-        {
-          label: '下次请求检查',
-          value: reliability?.nextBackgroundCheckAt
-            ? `${formatDiagnosticTime(reliability.nextBackgroundCheckAt, input.now)}（实际时间由 iOS 决定）`
-            : '当前没有已登记的请求',
-        },
-      ],
-    },
-    {
-      title: '最近信号',
-      rows: [
-        {
-          label: '地点判断',
-          value: input.currentPlace
-            ? `${input.currentPlace.label} · ${input.currentPlace.radius}`
-            : input.currentLocationState === 'refreshing'
-              ? '正在确认当前位置'
-              : '位置尚未确认',
-        },
-        {
-          label: '可信位置',
-          value: locationSource
-            ? `${formatDiagnosticTime(locationSource.timestamp, input.now)} · 精度约 ${Math.round(locationSource.accuracy ?? 0)} 米`
-            : '暂无可信位置记录',
-        },
-        {
-          label: '可信活动',
-          value: lastActivity
-            ? `${formatDiagnosticTime(lastActivity.timestamp, input.now)} · ${activitySourceLabels[lastActivity.source] ?? lastActivity.source} · ${lastActivity.title}`
-            : '暂无可信活动记录',
-        },
-        {
-          label: '最近风险',
-          value: lastRisk
-            ? `${formatDiagnosticTime(lastRisk.timestamp, input.now)} · ${lastRisk.title}：${lastRisk.description}`
-            : '暂无风险记录',
-        },
-        {
-          label: '风险恢复',
-          value: !lastRisk
-            ? '暂无风险记录'
-            : recovery
-              ? `${formatDiagnosticTime(recovery.timestamp, input.now)} · ${recovery.title}：${recovery.description}`
-              : '尚未记录对应的恢复信号',
-        },
-      ],
-    },
-    {
-      title: '家人通知准备',
-      rows: [
-        { label: 'Apple 关键短信', value: criticalCapability },
-        { label: '最近短信操作', value: messagingStatus(input.criticalMessaging) },
-        { label: '异常检测环境', value: detectionContext(input.criticalMessaging) },
-      ],
-    },
-  ];
-}
 
 export function buildGuardianDiagnosticReport(input: GuardianDiagnosticsInput) {
+  // Sharing is a separate allowlist, not a serialization of the on-device UI.
+  // Never export arbitrary titles/descriptions/errors/IDs/place names, even when
+  // they look harmless: any of them may contain a phone, address or SMS body.
+  const label = (labels: Record<string, string>, key: unknown) =>
+    typeof key === 'string' && Object.prototype.hasOwnProperty.call(labels, key) ? labels[key] : '尚未确认';
+  const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? String(value) : '尚未确认';
+  const time = (value: string | number | undefined) => {
+    const parsed = timestamp(value);
+    return parsed !== undefined && parsed >= 0 && Number.isFinite(new Date(parsed).getTime())
+      ? formatDiagnosticTime(parsed, input.now) : '暂无记录';
+  };
+  const flag = (value: unknown, yes: string, no: string) => value === true ? yes
+    : value === false ? no : '尚未确认';
+  const eventLabels: Record<string, string> = {
+    LONG_STAY: '长时间停留', NO_MOTION_FOR_LONG_TIME: '家外长时间无活动',
+    LOW_BATTERY: '低电量', LOCATION_LOST: '无可信位置', SOS_SENT: '主动求助',
+    RETURN_HOME: '回到家范围', MOTION_DETECTED: '检测到活动',
+    BATTERY_RECOVERED: '电量恢复', LOCATION_RESTORED: '可信位置恢复',
+    LOCATION_UPDATED: '位置更新', GUARDIAN_SESSION_RESET: '守护周期重置', USER_CONFIRMED_SAFE: '本人确认安全',
+  };
+  const status = input.status;
+  const reliability = status?.reliability;
+  const health = status?.riskHealth;
+  const messaging = input.criticalMessaging;
+  const operation = messaging?.operations.at(-1);
+  const risk = newestEvent(input.events, (event) => riskTypes.has(event.type) || event.type === 'SOS_SENT');
+  const recovery = recoveryForRisk(risk, input.events, input.now);
+  const activity = newestEvent(input.events, (event) => event.type === 'MOTION_DETECTED');
+  const location = newestEvent(input.events, (event) => event.source === 'location' && !!event.location);
+  const eventSummary = (event: GuardianEvent | undefined) => event
+    ? `${time(event.timestamp)} · ${label(eventLabels, event.type)}` : '暂无记录';
+  const sections: DiagnosticSection[] = [
+    { title: '守护运行', rows: [
+      { label: '记录时间', value: input.events.some((event) => Date.parse(event.timestamp) > input.now + 5_000)
+        ? '存在晚于当前时间的记录，请检查系统日期与时间' : '未发现未来时间记录' },
+      { label: '数据模式', value: label({ demo: '演示模式', device: '设备模式' }, input.mode) },
+      { label: '检测模式', value: label({ test: '测试模式（不自动发送短信）', standard: '正式模式' }, status?.monitoringMode) },
+      { label: '自动守护', value: flag(status?.isGuardianOn, '已开启', '未开启') },
+      { label: '原生监听', value: flag(status?.isMonitoring, '正在运行', '未运行') },
+      { label: '守护时段', value: flag(status?.isInActiveWindow, '时段内', '时段外') },
+      { label: '守护地点数量', value: count(input.geofenceCount) },
+      { label: '地点同步', value: label(geofenceSyncLabels, input.geofenceSyncStatus) },
+      { label: '待同步事件', value: count(status?.pendingEventCount) },
+      { label: '最近原生错误', value: status?.lastError ? '有错误（详细内容未导出）' : '无错误记录' },
+    ] },
+    { title: '权限状态', rows: [
+      { label: '定位', value: label(locationPermissionLabels, input.permissions?.location) },
+      { label: '位置精度', value: label(accuracyLabels, input.permissions?.locationAccuracy) },
+      { label: '运动与健身', value: label(motionLabels, input.permissions?.motion) },
+      { label: '后台 App 刷新', value: label(backgroundRefreshLabels, input.permissions?.backgroundRefresh) },
+    ] },
+    { title: '电量与可信位置检查', rows: [
+      { label: '最近执行检查', value: time(health?.lastCheckAt) },
+      { label: '家外低电量', value: flag(health?.lowBatteryActive, '正在提醒', '当前未触发') },
+      { label: '可信位置时间', value: time(health?.lastTrustedLocationAt) },
+      { label: '位置检查', value: health?.locationReason ? label({
+        locationServicesDisabled: '系统定位服务关闭', locationPermissionDisabled: '缺少始终定位权限',
+        preciseLocationDisabled: '精确位置关闭', backgroundRefreshDisabled: '后台刷新不可用',
+        locationFailed: '长期无可信位置，最近定位失败', locationStale: '长期未取得可信位置',
+      }, health.locationReason) : health ? '当前未触发' : '尚未检查' },
+    ] },
+    { title: '后台恢复', rows: [
+      { label: '最近系统唤醒', value: `${time(reliability?.lastWakeAt)} · ${label(wakeReasonLabels, reliability?.lastWakeReason)}` },
+      { label: '最近恢复时间', value: time(reliability?.lastRestoreAt) },
+      { label: '最近恢复结果', value: flag(reliability?.lastRestoreSucceeded, '成功', '未成功') },
+      { label: '最近后台检查', value: time(reliability?.lastBackgroundCheckAt) },
+      { label: '下次请求检查', value: `${time(reliability?.nextBackgroundCheckAt)}（实际时间由 iOS 决定）` },
+    ] },
+    { title: '最近信号', rows: [
+      { label: '位置读取', value: label({ idle: '未采点', refreshing: '正在读取', ready: '已读取', error: '读取失败' }, input.currentLocationState) },
+      { label: '最近位置采样', value: time(Math.max(timestamp(input.currentLocation?.timestamp) ?? 0, timestamp(location?.timestamp) ?? 0) || undefined) },
+      { label: '可信活动', value: activity ? `${time(activity.timestamp)} · ${label(activitySourceLabels, activity.source)}` : '暂无记录' },
+      { label: '最近风险', value: eventSummary(risk) },
+      { label: '风险恢复', value: eventSummary(recovery) },
+    ] },
+    { title: '家人通知准备', rows: [
+      { label: 'Apple 关键短信', value: flag(messaging?.buildConfigured, '工程已配置', '工程尚未启用') },
+      { label: '家人数量', value: count(messaging?.recipients.length) },
+      { label: '最近短信操作', value: operation?.isTest ? '测试告警仅保存在本机，不会自动发送' : label({
+        prepared: '短信已准备', sending: '正在提交', retryScheduled: '等待重试',
+        accepted: '系统已接受发送，不代表送达或已阅读', failed: '发送失败', restricted: '发送受限',
+        expired: '已过有效期', cancelled: '已取消',
+      }, operation?.status) },
+      { label: '已尝试次数', value: count(operation?.attemptCount) },
+      { label: '短信操作错误', value: operation?.lastError ? '有错误（详细内容未导出）' : '无错误记录' },
+      { label: '异常检测环境', value: label({ foreground: '前台', background: '后台', restoration: '恢复守护' }, operation?.detectionContext) },
+    ] },
+  ];
   const lines = [
     '到家了么 · 守护诊断',
     `生成时间：${formatDiagnosticTime(input.now, input.now)}`,
-    '说明：报告不包含电话号码、短信正文或经纬度。',
+    '说明：报告不包含电话号码、短信正文或经纬度。姓名、地点名称及自由文本也不导出。',
+    '报告仍含事件时间、权限与运行状态；请仅分享给信任的人。',
   ];
-  for (const section of buildGuardianDiagnosticSections(input)) {
+  for (const section of sections) {
     lines.push('', `【${section.title}】`);
     for (const row of section.rows) lines.push(`${row.label}：${row.value}`);
   }

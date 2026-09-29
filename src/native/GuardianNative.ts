@@ -1,6 +1,7 @@
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import type { GuardianConfig } from '../domain/types';
 import type { NativeEventQueue } from './guardianEventSync';
+import { guardedNativeRead, parseGuardianNativeStatus, parsePermissionState } from './nativeReadGuard';
 
 export type PermissionState = {
   location: 'notDetermined' | 'denied' | 'restricted' | 'whenInUse' | 'always';
@@ -11,9 +12,18 @@ export type PermissionState = {
 };
 export type GuardianNativeStatus = {
   isGuardianOn: boolean;
+  isGuardianPaused: boolean;
   isMonitoring: boolean;
   isInActiveWindow: boolean;
   pendingEventCount: number;
+  dataDeletionPending?: boolean;
+  monitoringMode?: 'standard' | 'test';
+  riskHealth?: {
+    lowBatteryActive: boolean;
+    locationReason?: string;
+    lastTrustedLocationAt?: number;
+    lastCheckAt?: number;
+  };
   lastError?: string;
   reliability?: {
     lastWakeReason?: string;
@@ -32,10 +42,13 @@ export type GuardianNativeModule = NativeEventQueue & {
   getPermissions: () => Promise<PermissionState>;
   getCurrentLocation: () => Promise<unknown>;
   pickTime: (initialTime: string, title: string) => Promise<string | null>;
-  startGuardian: (config: GuardianConfig) => Promise<void>;
+  startGuardian: (config: GuardianConfig, resumePaused: boolean) => Promise<void>;
   stopGuardian: () => Promise<void>;
+  clearLocalData: () => Promise<void>;
+  beginDataDeletion: () => Promise<void>;
   setGeofences: (geofences: GuardianConfig['geofences']) => Promise<void>;
   setNoMotionThresholdMinutes: (value: number) => Promise<void>;
+  setMonitoringPolicy: (schedule: GuardianConfig['schedule']) => Promise<void>;
   setActiveWindow: (schedule: GuardianConfig['schedule']) => Promise<void>;
   setNotificationContacts: (contacts: GuardianConfig['contacts']) => Promise<void>;
   getCriticalMessagingPreparation: () => Promise<unknown>;
@@ -45,10 +58,49 @@ export type GuardianNativeModule = NativeEventQueue & {
   sendSOS: () => Promise<void>;
 };
 
+const guardedModules = new WeakMap<object, GuardianNativeModule>();
+
 export function getGuardianNative(): GuardianNativeModule {
   const native = Platform.OS === 'ios' ? NativeModules.GuardianNative : undefined;
   if (!native) throw new Error('当前环境尚未接入 iOS 守护模块。');
-  return native as GuardianNativeModule;
+  let guarded = guardedModules.get(native);
+  if (!guarded) {
+    // Native host objects may expose methods lazily/non-enumerably. Delegate
+    // explicitly instead of spreading the native object, preserving its receiver.
+    const delegate = <K extends keyof GuardianNativeModule>(method: K): GuardianNativeModule[K] =>
+      ((...args: unknown[]) => {
+        const operation = native[method];
+        if (typeof operation !== 'function') throw new Error('当前原生模块缺少所需接口，请更新 App 后重试。');
+        return operation.apply(native, args);
+      }) as GuardianNativeModule[K];
+    guarded = {
+      getPermissions: guardedNativeRead(delegate('getPermissions'), parsePermissionState, '读取系统权限'),
+      getCurrentStatus: guardedNativeRead(delegate('getCurrentStatus'), parseGuardianNativeStatus, '读取守护状态'),
+      addListener: delegate('addListener'),
+      removeListeners: delegate('removeListeners'),
+      requestPermissions: delegate('requestPermissions'),
+      requestMotionPermission: delegate('requestMotionPermission'),
+      getCurrentLocation: delegate('getCurrentLocation'),
+      pickTime: delegate('pickTime'),
+      startGuardian: delegate('startGuardian'),
+      stopGuardian: delegate('stopGuardian'),
+      clearLocalData: delegate('clearLocalData'),
+      beginDataDeletion: delegate('beginDataDeletion'),
+      setGeofences: delegate('setGeofences'),
+      setNoMotionThresholdMinutes: delegate('setNoMotionThresholdMinutes'),
+      setMonitoringPolicy: delegate('setMonitoringPolicy'),
+      setActiveWindow: delegate('setActiveWindow'),
+      setNotificationContacts: delegate('setNotificationContacts'),
+      getCriticalMessagingPreparation: delegate('getCriticalMessagingPreparation'),
+      requestCriticalMessagingAuthorization: delegate('requestCriticalMessagingAuthorization'),
+      refreshCriticalMessagingAuthorization: delegate('refreshCriticalMessagingAuthorization'),
+      getPendingEvents: delegate('getPendingEvents'),
+      acknowledgeEvents: delegate('acknowledgeEvents'),
+      sendSOS: delegate('sendSOS'),
+    };
+    guardedModules.set(native, guarded);
+  }
+  return guarded;
 }
 
 export function subscribeToGuardianEvents(listener: () => void) {

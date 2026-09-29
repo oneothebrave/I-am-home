@@ -1,5 +1,5 @@
-import React from 'react';
-import { Text, View } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { Text, TouchableOpacity, View } from 'react-native';
 import type { GuardianEvent, GuardianEventType } from '../domain/types';
 import { styles } from '../styles/appStyles';
 import { formatEventTime } from '../utils/time';
@@ -15,6 +15,7 @@ const footprintTypes = new Set<GuardianEventType>([
 ]);
 
 const duplicateWindowMs = 5 * 60 * 1000;
+export const FOOTPRINT_PAGE_SIZE = 40;
 
 function transitionKey(event: GuardianEvent) {
   return [event.type, event.geofenceId ?? '', event.locationLabel ?? '', event.title].join('|');
@@ -34,7 +35,12 @@ export function getFootprintEvents(events: GuardianEvent[]) {
 }
 
 export function FootprintsScreen({ events, now }: { events: GuardianEvent[]; now: number }) {
-  const footprints = getFootprintEvents(events);
+  const footprints = useMemo(() => getFootprintEvents(events), [events]);
+  // Anchor older pages by ID so live arrivals do not push the visible records.
+  // If retention removes that anchor, fall back to the latest available page.
+  const [anchor, setAnchor] = useState<string>();
+  const start = anchor ? Math.max(0, footprints.findIndex((event) => event.id === anchor)) : 0;
+  const visible = footprints.slice(start, start + FOOTPRINT_PAGE_SIZE);
 
   return (
     <>
@@ -52,7 +58,10 @@ export function FootprintsScreen({ events, now }: { events: GuardianEvent[]; now
         </View>
       ) : (
         <View style={styles.footprintList}>
-          {footprints.map((event) => (
+          <Text style={styles.settingHelpText}>
+            第 {start + 1}–{start + visible.length} 条，共 {footprints.length} 条
+          </Text>
+          {visible.map((event) => (
             <View style={styles.footprintRow} key={event.id}>
               <View style={styles.footprintMarker}>
                 <View style={styles.footprintMarkerDot} />
@@ -69,6 +78,25 @@ export function FootprintsScreen({ events, now }: { events: GuardianEvent[]; now
               </View>
             </View>
           ))}
+          {start > 0 && (
+            <TouchableOpacity accessibilityRole="button" style={styles.secondaryOutlineButton}
+              onPress={() => setAnchor(start > FOOTPRINT_PAGE_SIZE
+                ? footprints[start - FOOTPRINT_PAGE_SIZE].id : undefined)}>
+              <Text style={styles.secondaryOutlineButtonText}>较新记录</Text>
+            </TouchableOpacity>
+          )}
+          {start + FOOTPRINT_PAGE_SIZE < footprints.length && (
+            <TouchableOpacity accessibilityRole="button" style={styles.secondaryOutlineButton}
+              onPress={() => setAnchor(footprints[start + FOOTPRINT_PAGE_SIZE].id)}>
+              <Text style={styles.secondaryOutlineButtonText}>更早记录</Text>
+            </TouchableOpacity>
+          )}
+          {start > 0 && (
+            <TouchableOpacity accessibilityRole="button" style={styles.secondaryOutlineButton}
+              onPress={() => setAnchor(undefined)}>
+              <Text style={styles.secondaryOutlineButtonText}>回到最新记录</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
     </>

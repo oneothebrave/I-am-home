@@ -41,6 +41,8 @@ export const guardianConfig: GuardianConfig = {
     },
   ],
   schedule: {
+    monitoringMode: 'test',
+    locationLostThresholdMinutes: 120,
     startTime: '07:00',
     expectedReturnTime: '18:00',
     noMotionThresholdMinutes: 120,

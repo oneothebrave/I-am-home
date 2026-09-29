@@ -5,6 +5,10 @@
   "description": "到家了么 - iOS-first family safety guardian app prototype.",
   "main": "index.js",
   "scripts": {
+    "check:release": "node scripts/check-release.cjs",
+    "check:mac": "node scripts/check-mac.cjs",
+    "check:all": "npm run check:release && npm run typecheck && npm test && npm run bundle:ios",
+    "prebundle:ios": "npm run check:release",
     "typecheck": "tsc --noEmit",
     "test": "node --test --test-reporter=spec tests/*.test.cjs",
     "bundle:ios": "react-native bundle --platform ios --dev false --entry-file index.js --bundle-output dist/main.jsbundle --max-workers 2",
@@ -12,12 +16,13 @@
     "ios": "react-native run-ios"
   },
   "dependencies": {
-    "@react-native-async-storage/async-storage": "^3.1.1",
+    "@react-native-async-storage/async-storage": "3.1.1",
     "@react-native-community/geolocation": "^3.4.0",
     "react": "19.1.1",
     "react-native": "0.82.0"
   },
   "devDependencies": {
+    "fast-xml-parser": "5.10.1",
     "@react-native-community/cli": "^20.2.0",
     "@react-native/babel-preset": "0.82.0",
     "@react-native/metro-config": "0.82.0",

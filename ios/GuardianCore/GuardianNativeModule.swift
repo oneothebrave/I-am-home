@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import CoreLocation
 import CoreMotion
 import UserNotifications
@@ -9,6 +10,35 @@ import React
 final class GuardianNativeModule: RCTEventEmitter {
     private var observing = false
     private var runtime: GuardianRuntime { GuardianRuntime.shared }
+    private let storageProtectionQueue = DispatchQueue(label: "com.llingrui.iamhome.storage-protection")
+
+    @objc(checkLocalStorage:resolver:rejecter:)
+    func checkLocalStorage(_ request: [String: Any], resolver resolve: @escaping RCTPromiseResolveBlock,
+                           rejecter reject: @escaping RCTPromiseRejectBlock) {
+        let access: GuardianStorageIntegrity.Access
+        do { access = try GuardianStorageIntegrity.Access(request) }
+        catch { reject("STORAGE_INTEGRITY_ERROR", "本机存储检查请求无效。", nil); return }
+        let check: (Bool) -> Void = { authorized in
+            self.storageProtectionQueue.async {
+                do {
+                    try GuardianStorageIntegrity.check(access, deletionAuthorized: authorized)
+                    resolve("checked-v2")
+                } catch is GuardianStorageIntegrity.IntegrityError {
+                    reject("STORAGE_INTEGRITY_ERROR", "本机存储文件缺失、损坏或不一致，未确认读取或保存成功。", nil)
+                } catch {
+                    reject("STORAGE_PROTECTION_ERROR", "本机数据保护检查未完成，请解锁设备后重试。", nil)
+                }
+            }
+        }
+        if access.operation == .deletion {
+            // A JS flag alone cannot bypass integrity checks. The user-confirmed
+            // native deletion intent must already be durable before a repair write.
+            DispatchQueue.main.async { check((try? self.runtime.requireStore().dataDeletionPending) == true) }
+        } else {
+            // Ordinary checks never bootstrap GuardianRuntime or request permissions.
+            check(false)
+        }
+    }
 
     override static func requiresMainQueueSetup() -> Bool { true }
     override func supportedEvents() -> [String] {
@@ -67,15 +97,19 @@ final class GuardianNativeModule: RCTEventEmitter {
         perform(resolve, reject) { runtime in
             let store = try runtime.requireStore()
             return ["isGuardianOn": store.enabled, "isMonitoring": runtime.service?.isMonitoring ?? false,
+                    "isGuardianPaused": store.userPaused,
                     "isInActiveWindow": store.enabled && store.activeWindow?.contains(Date()) == true,
                     "pendingEventCount": store.pendingEvents.count,
+                    "dataDeletionPending": store.dataDeletionPending,
+                    "monitoringMode": store.monitoringPolicy.mode.rawValue,
+                    "riskHealth": store.riskState.dictionary,
                     "lastError": runtime.lastError.map { String(describing: $0) } ?? "",
                     "reliability": runtime.reliabilityDiagnostics] as [String: Any]
         }
     }
 
-    @objc(startGuardian:resolver:rejecter:)
-    func startGuardian(config: [String: Any], resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    @objc(startGuardian:resumePaused:resolver:rejecter:)
+    func startGuardian(config: [String: Any], resumePaused: Bool, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
         perform(resolve, reject) { runtime in
             guard let raw = config["geofences"] as? [[String: Any]],
                   let rawContacts = config["contacts"] as? [[String: Any]],
@@ -86,7 +120,9 @@ final class GuardianNativeModule: RCTEventEmitter {
                 geofences: raw.map { try GuardianGeofence(dictionary: $0) },
                 noMotionThresholdMinutes: threshold.intValue,
                 activeWindow: try GuardianActiveWindow(dictionary: schedule),
-                notificationContacts: rawContacts.map { try GuardianNotificationContact(dictionary: $0) }
+                notificationContacts: rawContacts.map { try GuardianNotificationContact(dictionary: $0) },
+                monitoringPolicy: try GuardianMonitoringPolicy(dictionary: schedule),
+                resumePaused: resumePaused
             )
             runtime.clearLastError()
             return nil
@@ -98,6 +134,24 @@ final class GuardianNativeModule: RCTEventEmitter {
         perform(resolve, reject) { runtime in
             try runtime.requireService().stop()
             runtime.clearLastError()
+            return nil
+        }
+    }
+
+    // The user confirms this destructive action in JS before invoking the bridge.
+    // It cannot revoke an SMS already accepted by iOS or system permissions.
+    @objc(clearLocalData:rejecter:)
+    func clearLocalData(resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+        perform(resolve, reject) { runtime in
+            try runtime.clearLocalData()
+            return nil
+        }
+    }
+
+    @objc(beginDataDeletion:rejecter:)
+    func beginDataDeletion(resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+        perform(resolve, reject) { runtime in
+            try runtime.beginDataDeletion()
             return nil
         }
     }
@@ -114,6 +168,9 @@ final class GuardianNativeModule: RCTEventEmitter {
     @objc(setNoMotionThresholdMinutes:resolver:rejecter:)
     func setNoMotionThresholdMinutes(value: NSNumber, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
         perform(resolve, reject) { runtime in
+            guard value.doubleValue == Double(value.intValue),
+                  CFGetTypeID(value) != CFBooleanGetTypeID()
+            else { throw GuardianCoreError.invalidConfiguration }
             try runtime.requireService().setNoMotionThresholdMinutes(value.intValue)
             runtime.clearLastError()
             return nil
@@ -124,6 +181,19 @@ final class GuardianNativeModule: RCTEventEmitter {
     func setActiveWindow(schedule: [String: Any], resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
         perform(resolve, reject) { runtime in
             try runtime.requireService().setActiveWindow(try GuardianActiveWindow(dictionary: schedule))
+            runtime.clearLastError()
+            return nil
+        }
+    }
+
+    @objc(setMonitoringPolicy:resolver:rejecter:)
+    func setMonitoringPolicy(schedule: [String: Any], resolver resolve: @escaping RCTPromiseResolveBlock,
+                             rejecter reject: @escaping RCTPromiseRejectBlock) {
+        perform(resolve, reject) { runtime in
+            try runtime.requireService().setMonitoringPolicy(
+                GuardianMonitoringPolicy(dictionary: schedule),
+                activeWindow: GuardianActiveWindow(dictionary: schedule))
+            runtime.processCriticalMessages(reason: "policy-change")
             runtime.clearLastError()
             return nil
         }
@@ -149,7 +219,8 @@ final class GuardianNativeModule: RCTEventEmitter {
                 "apiAvailable": GuardianCriticalMessagingCapability.apiAvailable,
                 "buildConfigured": GuardianCriticalMessagingCapability.enabledForBuild,
                 "automaticSendingEnabled": GuardianCriticalMessagingCapability.apiAvailable &&
-                    GuardianCriticalMessagingCapability.enabledForBuild,
+                    GuardianCriticalMessagingCapability.enabledForBuild &&
+                    store.monitoringPolicy.mode == .standard,
                 "requiresBackgroundExecution": true,
                 "readiness": runtime.messagingCoordinator?.readiness ?? "unavailable",
                 "recipients": store.notificationContacts.sorted(by: { $0.priority < $1.priority }).map { $0.toDictionary() },

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Linking, Text, TouchableOpacity, View } from 'react-native';
 import type { GuardianContact, GuardianEvent, GuardianSchedule } from '../domain/types';
 import type { CurrentLocationSample } from '../domain/validation';
@@ -20,8 +20,9 @@ import {
 import { FamilyScreen } from './FamilyScreen';
 import { FootprintsScreen, getFootprintEvents } from './FootprintsScreen';
 import { RulesScreen } from './RulesScreen';
+import { DataManagementScreen } from './DataManagementScreen';
 
-type MySection = 'family' | 'schedule' | 'permissions' | 'footprints' | 'diagnostics' | undefined;
+type MySection = 'family' | 'schedule' | 'permissions' | 'footprints' | 'diagnostics' | 'data' | undefined;
 
 const permissionLabel: Record<PermissionState['location'], string> = {
   notDetermined: '尚未设置',
@@ -98,6 +99,7 @@ export function MyScreen({
   schedule,
   onAddContact,
   onChangeSchedule,
+  onClearLocalData,
   onRefreshDiagnostics = async () => undefined,
   onRefreshPermissions,
   onRemoveContact,
@@ -122,7 +124,8 @@ export function MyScreen({
   permissions?: PermissionState;
   schedule: GuardianSchedule;
   onAddContact: (contact: GuardianContact) => void;
-  onChangeSchedule: (schedule: GuardianSchedule) => void;
+  onChangeSchedule: (schedule: GuardianSchedule) => void | Promise<void>;
+  onClearLocalData: () => Promise<void>;
   onRefreshDiagnostics?: () => Promise<void>;
   onRefreshPermissions: () => Promise<void>;
   onRemoveContact: (id: string) => void;
@@ -137,7 +140,7 @@ export function MyScreen({
   const [testNotificationPending, setTestNotificationPending] = useState(false);
   const [criticalMessagingAuthorizationPending, setCriticalMessagingAuthorizationPending] =
     useState(false);
-  const footprintCount = getFootprintEvents(events).length;
+  const footprintCount = useMemo(() => getFootprintEvents(events).length, [events]);
   const firstContact = [...contacts].sort((a, b) => a.priority - b.priority)[0];
   const diagnosticsInput: GuardianDiagnosticsInput = {
     mode,
@@ -168,7 +171,7 @@ export function MyScreen({
           ? '权限'
           : activeSection === 'footprints'
             ? '足迹'
-            : '守护诊断';
+            : activeSection === 'data' ? '数据与隐私' : '守护诊断';
 
   const showShortcutInstallError = () =>
     Alert.alert(
@@ -390,6 +393,7 @@ export function MyScreen({
         {activeSection === 'diagnostics' && (
           <DiagnosticsScreen input={diagnosticsInput} onRefresh={onRefreshDiagnostics} />
         )}
+        {activeSection === 'data' && <DataManagementScreen onClear={onClearLocalData} />}
       </>
     );
   }
@@ -406,6 +410,11 @@ export function MyScreen({
           label="守护时间"
           onPress={() => setActiveSection('schedule')}
           value={`${schedule.startTime}–${schedule.expectedReturnTime}`}
+        />
+        <SettingsRow
+          label="守护模式"
+          onPress={() => setActiveSection('schedule')}
+          value={schedule.monitoringMode === 'test' ? '测试模式' : '正式模式'}
         />
         <SettingsRow
           label="权限"
@@ -431,6 +440,7 @@ export function MyScreen({
           onPress={() => setActiveSection('diagnostics')}
           value={diagnosticsSummary.value}
         />
+        <SettingsRow label="数据与隐私" value="保存与清除" onPress={() => setActiveSection('data')} />
       </View>
 
     </>

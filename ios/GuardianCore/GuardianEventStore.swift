@@ -3,8 +3,10 @@ import Foundation
 // Accessed on the main queue together with CLLocationManager and the RN bridge.
 final class GuardianEventStore {
     private struct State: Codable {
-        var version = 5
+        var version = 6
         var enabled = false
+        var userPaused = false
+        var dataDeletionPending = false
         var geofences: [GuardianGeofence] = []
         var events: [GuardianEvent] = []
         var noMotionThresholdMinutes = 120
@@ -16,12 +18,17 @@ final class GuardianEventStore {
         var activeInactivityIncidentAt: Date?
         var activeInactivityIncidentEventId: String?
         var movementAnchor: GuardianMovementAnchor?
+        var monitoringPolicy = GuardianMonitoringPolicy()
+        var riskState = GuardianRiskState()
+        var activeRiskEventIds: [String: String] = [:]
 
         private enum CodingKeys: String, CodingKey {
+            case dataDeletionPending, userPaused
             case version, enabled, geofences, events, noMotionThresholdMinutes, activeWindow, inactivity
             case notificationContacts, criticalMessagingAuthorizations, criticalMessageOperations
             case activeInactivityIncidentAt, activeInactivityIncidentEventId
             case movementAnchor
+            case monitoringPolicy, riskState, activeRiskEventIds
         }
 
         init() {}
@@ -30,6 +37,10 @@ final class GuardianEventStore {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
             enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+            userPaused = try container.decodeIfPresent(Bool.self, forKey: .userPaused) ?? false
+            if userPaused { enabled = false }
+            dataDeletionPending = try container.decodeIfPresent(Bool.self, forKey: .dataDeletionPending) ?? false
+            if dataDeletionPending { enabled = false }
             geofences = try container.decodeIfPresent([GuardianGeofence].self, forKey: .geofences) ?? []
             events = try container.decodeIfPresent([GuardianEvent].self, forKey: .events) ?? []
             noMotionThresholdMinutes = try container.decodeIfPresent(Int.self, forKey: .noMotionThresholdMinutes) ?? 120
@@ -44,11 +55,20 @@ final class GuardianEventStore {
             activeInactivityIncidentAt = try container.decodeIfPresent(Date.self, forKey: .activeInactivityIncidentAt) ?? inactivity.alertEmittedAt
             activeInactivityIncidentEventId = try container.decodeIfPresent(String.self, forKey: .activeInactivityIncidentEventId)
             movementAnchor = try container.decodeIfPresent(GuardianMovementAnchor.self, forKey: .movementAnchor)
+            if version >= 6 {
+                monitoringPolicy = try container.decode(GuardianMonitoringPolicy.self, forKey: .monitoringPolicy)
+                riskState = try container.decode(GuardianRiskState.self, forKey: .riskState)
+                activeRiskEventIds = try container.decode([String: String].self, forKey: .activeRiskEventIds)
+            } else {
+                monitoringPolicy = GuardianMonitoringPolicy(noMotionThresholdMinutes: noMotionThresholdMinutes)
+            }
         }
     }
     private let fileURL: URL
     private var state: State
     var enabled: Bool { state.enabled }
+    var userPaused: Bool { state.userPaused }
+    var dataDeletionPending: Bool { state.dataDeletionPending }
     var geofences: [GuardianGeofence] { state.geofences }
     var pendingEvents: [GuardianEvent] { state.events }
     var noMotionThresholdMinutes: Int { state.noMotionThresholdMinutes }
@@ -61,6 +81,8 @@ final class GuardianEventStore {
     var activeInactivityIncidentEventId: String? { state.activeInactivityIncidentEventId }
     var hasUnresolvedInactivityIncident: Bool { state.activeInactivityIncidentAt != nil }
     var movementAnchor: GuardianMovementAnchor? { state.movementAnchor }
+    var monitoringPolicy: GuardianMonitoringPolicy { state.monitoringPolicy }
+    var riskState: GuardianRiskState { state.riskState }
 
     func setMovementAnchor(_ value: GuardianMovementAnchor?) throws {
         var next = state
@@ -68,24 +90,40 @@ final class GuardianEventStore {
         try commit(next)
     }
 
-    init(fileURL: URL? = nil) throws {
+    init(fileURL: URL? = nil, resettingForDeletion: Bool = false) throws {
         if let fileURL { self.fileURL = fileURL }
         else {
             let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
                 .appendingPathComponent("GuardianCore", isDirectory: true)
             self.fileURL = directory.appendingPathComponent("state-v1.json")
         }
-        if FileManager.default.fileExists(atPath: self.fileURL.path) {
+        // Only an explicitly confirmed delete may bypass corrupt/unknown data.
+        // Ordinary startup still fails closed and never replaces the user's file.
+        if resettingForDeletion {
+            state = State()
+            state.dataDeletionPending = true
+            try commit(state)
+        } else if FileManager.default.fileExists(atPath: self.fileURL.path) {
+            // Upgrade existing files even if no business-data migration/write is needed.
+            try GuardianStorageProtection.prepareDirectory(self.fileURL.deletingLastPathComponent())
+            try GuardianStorageProtection.protectFile(self.fileURL)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .millisecondsSince1970
             state = try decoder.decode(State.self, from: Data(contentsOf: self.fileURL))
-            guard (1...5).contains(state.version) else { throw GuardianCoreError.unsupportedVersion }
+            guard (1...6).contains(state.version) else { throw GuardianCoreError.unsupportedVersion }
             try GuardianGeofence.validate(state.geofences)
             try GuardianNotificationContact.validate(state.notificationContacts)
             try Self.validateThreshold(state.noMotionThresholdMinutes)
+            try state.monitoringPolicy.validate()
+            guard state.monitoringPolicy.noMotionThresholdMinutes == state.noMotionThresholdMinutes
+            else { throw GuardianCoreError.invalidConfiguration }
             var needsCommit = false
-            if state.version < 5 {
-                state.version = 5
+            if state.version < 6 {
+                state.version = 6
+                // Legacy builds did not distinguish test runs. Never promote their queued alerts.
+                var migrated = state
+                resetRiskSession(in: &migrated, reason: "升级后已进入测试模式，请检查设置后选择正式模式。", at: Date())
+                state = migrated
                 needsCommit = true
             }
             if state.activeInactivityIncidentEventId == nil,
@@ -114,11 +152,28 @@ final class GuardianEventStore {
         geofences: [GuardianGeofence],
         noMotionThresholdMinutes: Int? = nil,
         activeWindow: GuardianActiveWindow? = nil,
-        notificationContacts: [GuardianNotificationContact]? = nil
+        notificationContacts: [GuardianNotificationContact]? = nil,
+        monitoringPolicy: GuardianMonitoringPolicy? = nil,
+        userPaused: Bool? = nil
     ) throws {
+        guard !state.dataDeletionPending else { throw GuardianCoreError.invalidConfiguration }
         try GuardianGeofence.validate(geofences)
         var next = state
+        let wasEnabled = next.enabled
+        if let userPaused { next.userPaused = userPaused }
+        guard !enabled || !next.userPaused else { throw GuardianCoreError.invalidConfiguration }
         next.enabled = enabled
+        if !enabled && wasEnabled {
+            resetRiskSession(in: &next, reason: "守护已暂停，本轮风险检查已结束。", at: Date())
+        }
+        if let monitoringPolicy {
+            try monitoringPolicy.validate()
+            if monitoringPolicy != next.monitoringPolicy {
+                resetRiskSession(in: &next, reason: "守护规则已改变，重新开始风险检查。", at: Date())
+            }
+            next.monitoringPolicy = monitoringPolicy
+            next.noMotionThresholdMinutes = monitoringPolicy.noMotionThresholdMinutes
+        }
         if !enabled {
             cancelUnsentCriticalMessages(
                 eventId: next.activeInactivityIncidentEventId,
@@ -132,6 +187,8 @@ final class GuardianEventStore {
         next.geofences = geofences
         if let noMotionThresholdMinutes {
             try Self.validateThreshold(noMotionThresholdMinutes)
+            next.monitoringPolicy.noMotionThresholdMinutes = noMotionThresholdMinutes
+            try next.monitoringPolicy.validate()
             next.noMotionThresholdMinutes = noMotionThresholdMinutes
         }
         if let activeWindow { next.activeWindow = activeWindow }
@@ -154,14 +211,118 @@ final class GuardianEventStore {
     }
 
     func setNoMotionThresholdMinutes(_ value: Int) throws {
-        try Self.validateThreshold(value)
+        var policy = state.monitoringPolicy
+        policy.noMotionThresholdMinutes = value
+        try setMonitoringPolicy(policy, activeWindow: state.activeWindow)
+    }
+
+    func setMonitoringPolicy(_ policy: GuardianMonitoringPolicy, activeWindow: GuardianActiveWindow?) throws {
+        guard !state.dataDeletionPending else { throw GuardianCoreError.invalidConfiguration }
+        try policy.validate()
+        guard policy != state.monitoringPolicy || activeWindow != state.activeWindow else { return }
         var next = state
-        next.noMotionThresholdMinutes = value
+        resetRiskSession(in: &next, reason: "守护规则已改变，旧告警已结束并重新计时。", at: Date())
+        next.monitoringPolicy = policy
+        next.noMotionThresholdMinutes = policy.noMotionThresholdMinutes
+        next.activeWindow = activeWindow
         try commit(next)
     }
 
     @discardableResult
+    func reconcileClock(at date: Date) throws -> Bool {
+        var next = state
+        var changed = next.inactivity.reconcileClock(at: date)
+        if next.movementAnchor.map({ $0.timestamp > date.addingTimeInterval(5) }) == true {
+            next.movementAnchor = nil
+            changed = true
+        }
+        if next.activeInactivityIncidentAt.map({ $0 > date.addingTimeInterval(5) }) == true {
+            next.activeInactivityIncidentAt = date
+            changed = true
+        }
+        if changed { try commit(next) }
+        return changed
+    }
+
+    private func resetRiskSession(in next: inout State, reason: String, at date: Date) {
+        let ids = Set(next.criticalMessageOperations.map(\.eventId))
+        for id in ids { cancelUnsentCriticalMessages(eventId: id, reason: reason, at: date, in: &next) }
+        next.activeRiskEventIds = [:]
+        next.riskState = GuardianRiskState()
+        next.activeInactivityIncidentAt = nil
+        next.activeInactivityIncidentEventId = nil
+        next.inactivity.suspendAwayTracking()
+        next.events.append(GuardianEvent(type: .guardianSessionReset, title: "本轮守护检查已结束",
+            description: reason, timestamp: date, source: "user",
+            isTest: next.monitoringPolicy.mode == .test))
+    }
+
+    // Detector state, recovery, event queue and all recipient operations commit together.
+    func evaluateRisks(_ check: GuardianRiskCheck, detectionContext: String) throws -> [GuardianEvent] {
+        guard !state.dataDeletionPending else { return [] }
+        var next = state
+        let transitions = next.riskState.evaluate(check, policy: next.monitoringPolicy)
+        var emitted: [GuardianEvent] = []
+        for transition in transitions {
+            let type: GuardianEventType
+            let title: String
+            let detail: String
+            let reason: String?
+            let activeKey: String
+            let isRisk: Bool
+            switch transition {
+            case .lowBattery:
+                type = .lowBattery; title = "家外手机电量偏低"
+                detail = "手机在家外，电量低于 20% 且未充电，建议家人留意。"
+                reason = nil; activeKey = GuardianEventType.lowBattery.rawValue; isRisk = true
+            case .batteryRecovered:
+                type = .batteryRecovered; title = "低电量提醒已解除"
+                detail = "手机已连接充电、电量恢复或结束家外守护。"
+                reason = nil; activeKey = GuardianEventType.lowBattery.rawValue; isRisk = false
+            case .locationLost(let cause):
+                type = .locationLost; title = "位置守护需要留意"
+                detail = cause.explanation
+                reason = cause.rawValue; activeKey = GuardianEventType.locationLost.rawValue; isRisk = true
+            case .locationRestored:
+                type = .locationRestored; title = "位置异常提醒已解除"
+                detail = check.expectsLocation
+                    ? "已恢复可信位置及必要权限。"
+                    : "当前已结束家外位置检查；不表示已取得新的位置。"
+                reason = nil; activeKey = GuardianEventType.locationLost.rawValue; isRisk = false
+            case .locationPeriodReset:
+                type = .locationRestored; title = "旧时段的位置提醒已结束"
+                detail = "已进入新的守护时段，重新等待可信位置；不表示已经恢复定位。"
+                reason = nil; activeKey = GuardianEventType.locationLost.rawValue; isRisk = false
+            }
+            let event = GuardianEvent(type: type, title: title, description: detail,
+                timestamp: check.date, source: activeKey == "LOW_BATTERY" ? "battery" : "location",
+                batteryLevel: check.batteryLevel.flatMap { (0...100).contains($0) ? Float($0) / 100 : nil },
+                isTest: next.monitoringPolicy.mode == .test, riskReason: reason)
+            if isRisk {
+                next.activeRiskEventIds[activeKey] = event.id
+                var operations = GuardianCriticalMessageOperation.prepare(for: event,
+                    contacts: next.notificationContacts,
+                    thresholdMinutes: next.monitoringPolicy.locationLostThresholdMinutes)
+                for index in operations.indices { operations[index].detectionContext = detectionContext }
+                let prepared = operations.map {
+                    applyingCooldown(to: $0, existing: next.criticalMessageOperations)
+                }
+                next.criticalMessageOperations.append(contentsOf: prepared)
+            } else {
+                cancelUnsentCriticalMessages(eventId: next.activeRiskEventIds[activeKey],
+                    reason: detail, at: check.date, in: &next)
+                next.activeRiskEventIds.removeValue(forKey: activeKey)
+            }
+            next.events.append(event)
+            emitted.append(event)
+        }
+        if next.riskState != state.riskState || !emitted.isEmpty { try commit(next) }
+        return emitted
+    }
+
+    @discardableResult
     func setActiveWindow(_ value: GuardianActiveWindow) throws -> Bool {
+        guard !state.dataDeletionPending else { throw GuardianCoreError.invalidConfiguration }
         guard state.activeWindow != value else { return false }
         var next = state
         next.activeWindow = value
@@ -187,6 +348,7 @@ final class GuardianEventStore {
     }
 
     func setNotificationContacts(_ contacts: [GuardianNotificationContact]) throws {
+        guard !state.dataDeletionPending else { throw GuardianCoreError.invalidConfiguration }
         try GuardianNotificationContact.validate(contacts)
         var next = state
         next.notificationContacts = contacts
@@ -238,9 +400,6 @@ final class GuardianEventStore {
             applyingCooldown(to: operation, existing: next.criticalMessageOperations)
         }
         next.criticalMessageOperations.append(contentsOf: newMessages)
-        if next.criticalMessageOperations.count > 100 {
-            next.criticalMessageOperations.removeFirst(next.criticalMessageOperations.count - 100)
-        }
         try commit(next)
     }
 
@@ -248,6 +407,45 @@ final class GuardianEventStore {
         var next = state
         next.events.removeAll { ids.contains($0.id) }
         try commit(next)
+    }
+
+    // The JS journal remains pending until this replacement and runtime shutdown
+    // succeed. An I/O failure must never be reported as successful deletion.
+    func clearLocalData() throws {
+        var cleared = State()
+        cleared.userPaused = true
+        try commit(cleared)
+    }
+
+    func beginDataDeletion() throws {
+        var next = state
+        next.dataDeletionPending = true
+        next.userPaused = true
+        next.enabled = false
+        resetRiskSession(in: &next, reason: "正在清除本机数据，守护已停止。", at: Date())
+        try commit(next)
+    }
+
+    func pruneHistory(at date: Date = Date()) throws {
+        var next = state
+        Self.pruneCompletedMessages(in: &next, at: date)
+        try commit(next)
+    }
+
+    private static func pruneCompletedMessages(in value: inout State, at date: Date) {
+        let activeIds = Set(value.activeRiskEventIds.values)
+            .union(value.activeInactivityIncidentEventId.map { [$0] } ?? [])
+        let cutoff = date.addingTimeInterval(-30 * 24 * 60 * 60)
+        let terminal: Set<GuardianCriticalMessageStatus> = [.accepted, .failed, .expired, .cancelled]
+        let completed = value.criticalMessageOperations.filter {
+            terminal.contains($0.status) && !activeIds.contains($0.eventId) && $0.statusUpdatedAt >= cutoff
+        }.sorted { $0.statusUpdatedAt < $1.statusUpdatedAt }
+        let retainedIds = Set(completed.suffix(100).map(\.id))
+        value.criticalMessageOperations.removeAll {
+            terminal.contains($0.status) && !activeIds.contains($0.eventId) && !retainedIds.contains($0.id)
+        }
+        // Unacknowledged events are a delivery queue, not disposable history.
+        // Only durable JS acknowledgement or explicit clear removes them.
     }
 
     private func resolveIncident(for event: GuardianEvent, in next: inout State) {
@@ -312,7 +510,7 @@ final class GuardianEventStore {
         let byContact = Dictionary(uniqueKeysWithValues: records.map { ($0.contactId, $0.status) })
         for index in next.criticalMessageOperations.indices {
             var operation = next.criticalMessageOperations[index]
-            guard isIncidentActive(operation.eventId, in: next),
+            guard operation.isTest != true, isIncidentActive(operation.eventId, in: next),
                   ![.accepted, .failed, .expired, .cancelled, .sending].contains(operation.status),
                   operation.expiresAt > date,
                   let authorization = byContact[operation.contactId]
@@ -343,7 +541,9 @@ final class GuardianEventStore {
     }
 
     func readyCriticalMessageOperations(at date: Date = Date()) -> [GuardianCriticalMessageOperation] {
-        state.criticalMessageOperations.filter { operation in
+        guard state.monitoringPolicy.mode == .standard else { return [] }
+        return state.criticalMessageOperations.filter { operation in
+            operation.isTest != true &&
             isIncidentActive(operation.eventId, in: state) &&
                 operation.authorizationStatus == .approved &&
                 [.prepared, .retryScheduled].contains(operation.status) &&
@@ -361,13 +561,22 @@ final class GuardianEventStore {
         var next = state
         guard let index = next.criticalMessageOperations.firstIndex(where: { $0.id == id }) else { return nil }
         var operation = next.criticalMessageOperations[index]
-        guard isIncidentActive(operation.eventId, in: next),
+        guard next.monitoringPolicy.mode == .standard, operation.isTest != true,
+              isIncidentActive(operation.eventId, in: next),
               operation.authorizationStatus == .approved,
               [.prepared, .retryScheduled].contains(operation.status),
               operation.expiresAt > date,
               (operation.nextAttemptAt.map { $0 <= date } ?? true),
               operation.attemptCount < GuardianCriticalMessagingPolicy.maximumAttempts
         else { return nil }
+        // Other risks may have started sending since this operation was queued.
+        operation = applyingCooldown(to: operation, existing: next.criticalMessageOperations, at: date)
+        if operation.cooldownUntil.map({ $0 > date }) == true {
+            operation.statusUpdatedAt = date
+            next.criticalMessageOperations[index] = operation
+            try commit(next)
+            return nil
+        }
         operation.status = .sending
         operation.statusUpdatedAt = date
         operation.attemptCount += 1
@@ -391,6 +600,8 @@ final class GuardianEventStore {
         var next = state
         guard let index = next.criticalMessageOperations.firstIndex(where: { $0.id == id }) else { return }
         var operation = next.criticalMessageOperations[index]
+        // A late error (including a post-write protection failure) cannot undo acceptance.
+        guard operation.status != .accepted else { return }
         if accepted {
             operation.status = .accepted
             operation.acceptedAt = date
@@ -447,16 +658,18 @@ final class GuardianEventStore {
 
     private func applyingCooldown(
         to value: GuardianCriticalMessageOperation,
-        existing: [GuardianCriticalMessageOperation]
+        existing: [GuardianCriticalMessageOperation],
+        at date: Date? = nil
     ) -> GuardianCriticalMessageOperation {
         var operation = value
+        guard operation.isTest != true else { return operation }
         let lastAttempt = existing
-            .filter { $0.contactId == value.contactId && $0.eventId != value.eventId }
+            .filter { $0.isTest != true && $0.contactId == value.contactId && $0.eventId != value.eventId }
             .compactMap(\.lastAttemptAt)
             .max()
         guard let cooldownUntil = lastAttempt?.addingTimeInterval(
             GuardianCriticalMessagingPolicy.cooldownInterval
-        ), cooldownUntil > value.createdAt else { return operation }
+        ), cooldownUntil > (date ?? value.createdAt) else { return operation }
         operation.cooldownUntil = cooldownUntil
         operation.nextAttemptAt = cooldownUntil
         operation.status = .retryScheduled
@@ -489,7 +702,7 @@ final class GuardianEventStore {
     }
 
     private func isIncidentActive(_ eventId: String, in value: State) -> Bool {
-        value.activeInactivityIncidentEventId == eventId
+        value.activeInactivityIncidentEventId == eventId || value.activeRiskEventIds.values.contains(eventId)
     }
 
     private static func reconcileCriticalMessages(in value: inout State, at date: Date) -> Bool {
@@ -520,12 +733,17 @@ final class GuardianEventStore {
     }
 
     private func commit(_ next: State) throws {
-        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var next = next
+        Self.pruneCompletedMessages(in: &next, at: Date())
+        try GuardianStorageProtection.prepareDirectory(fileURL.deletingLastPathComponent())
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .millisecondsSince1970
         let data = try encoder.encode(next)
         try data.write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         state = next
+        // The atomic replacement already committed. Keep memory aligned with disk
+        // even if the subsequent metadata verification fails and the caller retries.
+        try GuardianStorageProtection.protectFile(fileURL)
     }
 
     private static func validateThreshold(_ value: Int) throws {

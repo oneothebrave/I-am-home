@@ -49,6 +49,8 @@
 	</array>
 	<key>RCTNewArchEnabled</key>
 	<true/>
+	<key>RCTAsyncStorageExcludeFromBackup</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>

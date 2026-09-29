@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createLoader } = require('./loadTs.cjs');
-const load = createLoader({ '@react-native-async-storage/async-storage': {} });
+const load = createLoader({ '@react-native-async-storage/async-storage': {}, 'react-native': {} });
 const { startGuardianEventSync } = load('src/native/guardianEventSync.ts');
 const { startGuardianGeofenceSync } = load('src/native/guardianGeofenceSync.ts');
 const { startGuardianControl } = load('src/native/guardianControl.ts');
@@ -284,6 +284,32 @@ test('failed geofence sync reports failure and retries the same desired state', 
   assert.equal(errors, 1);
   assert.equal(statuses.at(-1), 'synced');
 });
+
+for (const failMiddle of [false, true]) {
+  test(`geofence A -> pending B -> A restores A even if B fails: ${failMiddle}`, async () => {
+    let release, started;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const active = new Promise((resolve) => { started = resolve; });
+    const writes = [], statuses = [];
+    const sync = startGuardianGeofenceSync({ async setGeofences(value) {
+      writes.push(value[0].radiusMeters);
+      if (writes.length === 2) {
+        started(); await gate;
+        if (failMiddle) throw Error('B failed after an uncertain write');
+      }
+    } }, (value) => statuses.push(value), () => {});
+    const fence = (radiusMeters) => [{ id: 'home', name: '家', kind: 'home', radiusMeters,
+      center: { latitude: 30, longitude: 120 } }];
+    sync.update(fence(150)); await sync.flush();
+    sync.update(fence(300)); await active;
+    sync.update(fence(150)); release(); await sync.flush();
+    assert.deepEqual(writes, [150, 300, 150]);
+    assert.equal(statuses.at(-1), 'synced');
+    sync.update(fence(150)); await sync.flush();
+    assert.equal(writes.length, 3);
+    sync.stop();
+  });
+}
 test('current location samples reject stale, imprecise and malformed bridge data', () => {
   const now = Date.parse('2026-09-20T10:00:00.000Z');
   const valid = {
@@ -305,6 +331,7 @@ test('guardian control changes JS state only after native confirms start and sto
   const order = [];
   let status = {
     isGuardianOn: false,
+    isGuardianPaused: false,
     isMonitoring: false,
     pendingEventCount: 0,
   };
@@ -321,7 +348,7 @@ test('guardian control changes JS state only after native confirms start and sto
       },
       async stopGuardian() {
         order.push('stop');
-        status = { ...status, isGuardianOn: false, isMonitoring: false };
+        status = { ...status, isGuardianOn: false, isMonitoring: false, isGuardianPaused: true };
       },
     },
     (state) => states.push(state.phase),
@@ -370,7 +397,7 @@ test('guardian control serializes rapid toggles and refresh recovers native stat
   const startGate = new Promise((resolve) => {
     releaseStart = resolve;
   });
-  let status = { isGuardianOn: false, isMonitoring: false, pendingEventCount: 0 };
+  let status = { isGuardianOn: false, isGuardianPaused: false, isMonitoring: false, pendingEventCount: 0 };
   let concurrent = 0;
   let maxConcurrent = 0;
   const calls = [];
@@ -393,7 +420,7 @@ test('guardian control serializes rapid toggles and refresh recovers native stat
         concurrent++;
         maxConcurrent = Math.max(maxConcurrent, concurrent);
         calls.push('stop');
-        status = { ...status, isGuardianOn: false, isMonitoring: false };
+        status = { ...status, isGuardianOn: false, isMonitoring: false, isGuardianPaused: true };
         concurrent--;
       },
     },
@@ -417,6 +444,18 @@ test('guardian control serializes rapid toggles and refresh recovers native stat
   assert.deepEqual(enabled, [true, false, true]);
   assert.deepEqual(calls.slice(0, 4), ['start', 'status', 'stop', 'status']);
 });
+test('native stop is not confirmed unless durable pause intent is reported', async () => {
+  const states = [];
+  const control = startGuardianControl({
+    async startGuardian() {}, async stopGuardian() {},
+    async getCurrentStatus() { return { isGuardianOn: false, isMonitoring: false,
+      isGuardianPaused: false, isInActiveWindow: false, pendingEventCount: 0 }; },
+  }, (value) => states.push(value), () => {}, () => {});
+  await assert.rejects(control.setEnabled(false, createInitialStoredState().config), /状态.*不一致/);
+  assert.equal(states.at(-1).phase, 'error');
+  control.stop();
+});
+
 test('bridge export declarations match the TS queue and permission contract (static)', () => {
   const swift = fs.readFileSync(
     path.join(__dirname, '../ios/GuardianCore/GuardianNativeModule.swift'),
@@ -437,8 +476,11 @@ test('bridge export declarations match the TS queue and permission contract (sta
     'requestMotionPermission',
     'startGuardian',
     'stopGuardian',
+    'beginDataDeletion',
+    'clearLocalData',
     'setGeofences',
     'setNoMotionThresholdMinutes',
+    'setMonitoringPolicy',
     'setActiveWindow',
     'setNotificationContacts',
     'getCriticalMessagingPreparation',

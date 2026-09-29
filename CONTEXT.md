@@ -1,5 +1,7 @@
 # 到家说一声：Codex 项目交接 Prompt
 
+> 这是 2026-09-20 的历史交接材料，不是当前开发入口。2026-09-29 已清理下文旧演示队列等未使用模块；请以根目录 `HANDOFF.md` 和 `docs/bugfix-and-dead-code-cleanup.md` 为准，不要按旧方案恢复已删除代码。
+
 > 更新日期：2026-09-20
 > GitHub：https://github.com/oneothebrave/I-am-home
 > 分支：`main`

@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createLoader } = require('./loadTs.cjs');
-const load = createLoader({ '@react-native-async-storage/async-storage': {} });
+const load = createLoader({ '@react-native-async-storage/async-storage': {}, 'react-native': {} });
 const { createInitialStoredState, parseStoredState } = load('src/storage/guardianSchema.ts');
 const { createMemoryGuardianStorage: memory, createFallbackGuardianStorage: fallback } = load(
   'src/storage/guardianStorage.ts',
@@ -47,9 +47,12 @@ test('memory storage clones reads and writes; clear means absent', async () => {
   await driver.clear();
   assert.equal(await driver.load(), undefined);
 });
-test('AsyncStorage JSON adapter round-trips v3', async () => {
+test('AsyncStorage JSON adapter round-trips v4', async () => {
   const values = new Map();
   const adapterLoad = createLoader({
+    'react-native': { Platform: { OS: 'ios' }, NativeModules: { GuardianNative: {
+      async checkLocalStorage() { return 'checked-v2'; },
+    } } },
     '@react-native-async-storage/async-storage': {
       async getItem(key) {
         return values.get(key) ?? null;
@@ -125,7 +128,7 @@ test('dirty fallback is not overwritten by an old primary copy after recovery', 
 test('R07: bad JSON shape and future schema versions are rejected', () => {
   for (const value of [
     {},
-    { ...initial(), schemaVersion: 4 },
+    { ...initial(), schemaVersion: 5 },
     { ...initial(), isGuardianPaused: 'yes' },
     { ...initial(), localEvents: [{}] },
   ])
@@ -159,7 +162,7 @@ test('R09: legacy HH:mm events migrate across midnight without assuming recipien
   assert.equal(new Date(migrated.localEvents[0].timestamp).getDate(), 7);
   assert.equal(new Date(migrated.localEvents[1].timestamp).getDate(), 8);
   assert.equal(migrated.localEvents[1].contactId, undefined);
-  assert.equal(migrated.schemaVersion, 3);
+  assert.equal(migrated.schemaVersion, 4);
   assert.equal(migrated.isGuardianPaused, false);
 });
 test('v2 device state preserves an intentional pause during migration', () => {
@@ -169,7 +172,7 @@ test('v2 device state preserves an intentional pause during migration', () => {
   raw.mode = 'device';
   raw.isGuardianOn = false;
   const migrated = parseStoredState(raw);
-  assert.equal(migrated.schemaVersion, 3);
+  assert.equal(migrated.schemaVersion, 4);
   assert.equal(migrated.isGuardianPaused, true);
 });
 test('R12: invalid time, phone, duplicate contacts and excessive fences are rejected', () => {

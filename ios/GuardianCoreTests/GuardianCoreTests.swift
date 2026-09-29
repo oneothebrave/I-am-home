@@ -32,6 +32,197 @@ final class GuardianCoreTests: XCTestCase {
         ))!
     }
 
+    func testUserPauseSurvivesReloadAndOnlyExplicitResumeCanClearIt() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("state.json")
+        let store = try GuardianEventStore(fileURL: url)
+        XCTAssertFalse(store.userPaused)
+        try store.configure(enabled: true, geofences: [])
+        try store.configure(enabled: false, geofences: [], userPaused: true)
+        let restored = try GuardianEventStore(fileURL: url)
+        XCTAssertTrue(restored.userPaused)
+        XCTAssertFalse(restored.enabled)
+        try restored.configure(enabled: false, geofences: [])
+        XCTAssertThrowsError(try restored.configure(enabled: true, geofences: []))
+        XCTAssertTrue(restored.userPaused)
+        try restored.configure(enabled: true, geofences: [], userPaused: false)
+        XCTAssertTrue(restored.enabled)
+        XCTAssertFalse(try GuardianEventStore(fileURL: url).userPaused)
+        try restored.clearLocalData()
+        XCTAssertTrue(try GuardianEventStore(fileURL: url).userPaused)
+    }
+
+    func testClockRollbackRebasesInactivityWithoutInventingRecovery() {
+        let now = Date()
+        let future = now.addingTimeInterval(3600)
+        var state = GuardianInactivityState()
+        state.leaveHome(at: future)
+        XCTAssertTrue(state.evaluate(at: future.addingTimeInterval(60), thresholdMinutes: 1))
+        XCTAssertTrue(state.reconcileClock(at: now))
+        XCTAssertEqual(state.awaySince, now)
+        XCTAssertEqual(state.lastMovementAt, now)
+        XCTAssertNil(state.lastTrustedLocationAt)
+        XCTAssertEqual(state.alertEmittedAt, now)
+        XCTAssertFalse(state.observeMovement(at: now.addingTimeInterval(-1)))
+        XCTAssertFalse(state.reconcileClock(at: now.addingTimeInterval(1)))
+        XCTAssertTrue(state.observeMovement(at: now.addingTimeInterval(2)))
+        XCTAssertFalse(state.evaluate(at: now.addingTimeInterval(61), thresholdMinutes: 1))
+        XCTAssertTrue(state.evaluate(at: now.addingTimeInterval(62), thresholdMinutes: 1))
+    }
+
+    func testClockRollbackDropsFutureGPSOrderingAnchorButNotNormalHistory() {
+        let now = Date()
+        let future = location(time: now.addingTimeInterval(3600))
+        let fresh = location(time: now)
+        XCTAssertNil(GuardianLocationPolicy.chronologicalAnchor(future, now: now))
+        XCTAssertTrue(GuardianLocationPolicy.accepts(fresh, now: now))
+        XCTAssertFalse(GuardianLocationPolicy.indicatesMotion(
+            from: GuardianLocationPolicy.chronologicalAnchor(future, now: now), to: fresh))
+        let old = location(time: now.addingTimeInterval(-300))
+        XCTAssertEqual(GuardianLocationPolicy.chronologicalAnchor(old, now: now)?.timestamp, old.timestamp)
+    }
+
+    func testClockRollbackReconcilesPersistedAnchorsAndIncidentTogether() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("state.json")
+        let store = try GuardianEventStore(fileURL: url)
+        let now = Date(), future = Date().addingTimeInterval(3600)
+        var inactivity = GuardianInactivityState()
+        inactivity.leaveHome(at: future)
+        XCTAssertTrue(inactivity.evaluate(at: future.addingTimeInterval(60), thresholdMinutes: 1))
+        try store.setMovementAnchor(GuardianMovementAnchor(location(time: future)))
+        let risk = GuardianEvent(type: .noMotionForLongTime, title: "风险", description: "测试",
+            timestamp: future.addingTimeInterval(60), source: "motion")
+        try store.append(risk, updatingInactivity: inactivity)
+        let restored = try GuardianEventStore(fileURL: url)
+        XCTAssertTrue(try restored.reconcileClock(at: now))
+        XCTAssertNil(restored.movementAnchor)
+        XCTAssertNil(restored.inactivity.lastTrustedLocationAt)
+        XCTAssertEqual(restored.activeInactivityIncidentAt, now)
+        XCTAssertEqual(restored.activeInactivityIncidentEventId, risk.id)
+        XCTAssertTrue(restored.hasUnresolvedInactivityIncident)
+        let reloaded = try GuardianEventStore(fileURL: url)
+        XCTAssertFalse(try reloaded.reconcileClock(at: now))
+        XCTAssertTrue(reloaded.hasUnresolvedInactivityIncident)
+        try reloaded.append(GuardianEvent(type: .motionDetected, title: "恢复活动", description: "测试",
+            timestamp: now.addingTimeInterval(1), source: "motion"))
+        XCTAssertFalse(reloaded.hasUnresolvedInactivityIncident)
+    }
+
+    @MainActor
+    func testAcceptedSendWithResultWriteFailureNeverCompletesAsSendFailure() async throws {
+        for failAfterWrite in [false, true] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let url = directory.appendingPathComponent("state.json")
+            let store = try GuardianEventStore(fileURL: url)
+            let contact = try GuardianNotificationContact(dictionary: [
+                "id": "family", "name": "家人", "phone": "+8613800000000", "priority": 1])
+            try store.setNotificationContacts([contact])
+            try store.setMonitoringPolicy(GuardianMonitoringPolicy(mode: .standard), activeWindow: nil)
+            let date = riskCheck(0, battery: 10).date
+            _ = try store.evaluateRisks(riskCheck(0, battery: 10), detectionContext: "background")
+            try store.updateCriticalMessagingAuthorizations([contact.applePhoneNumber: "approved"], at: date)
+            let candidate = try XCTUnwrap(store.readyCriticalMessageOperations(at: date).first)
+            _ = try XCTUnwrap(store.beginCriticalMessageAttempt(id: candidate.id, at: date))
+            var sends = 0, completions = 0
+            do {
+                try await GuardianCriticalMessageAttempt.perform(send: {
+                    sends += 1
+                    return true
+                }, complete: { result in
+                    completions += 1
+                    let accepted = try result.get()
+                    XCTAssertTrue(accepted)
+                    if failAfterWrite {
+                        try store.completeCriticalMessageAttempt(id: candidate.id, accepted: accepted, at: date)
+                    }
+                    throw NSError(domain: "SyntheticResultWriteFailure", code: 1)
+                })
+                XCTFail("A result-write error must propagate, not become a retryable send error")
+            } catch { XCTAssertEqual((error as NSError).domain, "SyntheticResultWriteFailure") }
+            XCTAssertEqual(sends, 1)
+            XCTAssertEqual(completions, 1)
+            let reloaded = try GuardianEventStore(fileURL: url)
+            _ = try reloaded.reconcileCriticalMessages(at: date.addingTimeInterval(180))
+            let result = try XCTUnwrap(reloaded.criticalMessageOperations.first)
+            XCTAssertEqual(result.status, failAfterWrite ? .accepted : .failed)
+            if !failAfterWrite { XCTAssertEqual(result.lastErrorCode, "resultUnknown") }
+            XCTAssertTrue(reloaded.readyCriticalMessageOperations(at: date.addingTimeInterval(600)).isEmpty)
+        }
+    }
+
+    @MainActor
+    func testTransportFailureIsCompletedExactlyOnce() async throws {
+        var completions = 0
+        try await GuardianCriticalMessageAttempt.perform(send: {
+            throw NSError(domain: "SyntheticTransportFailure", code: 1)
+        }, complete: { result in
+            completions += 1
+            guard case .failure(let error) = result else { return XCTFail("Expected transport failure") }
+            XCTAssertEqual((error as NSError).domain, "SyntheticTransportFailure")
+        })
+        XCTAssertEqual(completions, 1)
+    }
+
+    func testTwoQueuedRisksRecheckCooldownAtSendTimeAndAcceptedCannotRegress() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try GuardianEventStore(fileURL: directory.appendingPathComponent("state.json"))
+        let first = try GuardianNotificationContact(dictionary: [
+            "id": "first", "name": "家人一", "phone": "+8613800000000", "priority": 1])
+        let second = try GuardianNotificationContact(dictionary: [
+            "id": "second", "name": "家人二", "phone": "+8613900000000", "priority": 2])
+        try store.setNotificationContacts([first, second])
+        try store.setMonitoringPolicy(GuardianMonitoringPolicy(mode: .standard), activeWindow: nil)
+        let check = riskCheck(0, battery: 10, blocker: .locationPermissionDisabled)
+        _ = try store.evaluateRisks(check, detectionContext: "background")
+        try store.updateCriticalMessagingAuthorizations([
+            first.applePhoneNumber: "approved", second.applePhoneNumber: "approved"], at: check.date)
+        let operations = store.readyCriticalMessageOperations(at: check.date)
+        XCTAssertEqual(operations.count, 4)
+        let pair = operations.filter { $0.contactId == first.id }
+        XCTAssertEqual(pair.count, 2)
+        _ = try XCTUnwrap(store.beginCriticalMessageAttempt(id: pair[0].id, at: check.date))
+        try store.completeCriticalMessageAttempt(id: pair[0].id, accepted: true, at: check.date)
+        try store.completeCriticalMessageAttempt(id: pair[0].id, accepted: false,
+            errorCode: "storageError", retryable: true, at: check.date.addingTimeInterval(1))
+        XCTAssertEqual(store.criticalMessageOperations.first { $0.id == pair[0].id }?.status, .accepted)
+        XCTAssertNil(try store.beginCriticalMessageAttempt(id: pair[1].id, at: check.date))
+        let waiting = try XCTUnwrap(store.criticalMessageOperations.first { $0.id == pair[1].id })
+        XCTAssertEqual(waiting.attemptCount, 0)
+        XCTAssertEqual(waiting.nextAttemptAt, check.date.addingTimeInterval(600))
+        let other = try XCTUnwrap(operations.first { $0.contactId == second.id })
+        XCTAssertNotNil(try store.beginCriticalMessageAttempt(id: other.id, at: check.date))
+        XCTAssertNil(try store.beginCriticalMessageAttempt(id: pair[1].id, at: check.date.addingTimeInterval(599)))
+        XCTAssertNotNil(try store.beginCriticalMessageAttempt(id: pair[1].id, at: check.date.addingTimeInterval(600)))
+    }
+
+    func testCooldownDoesNotDelaySameIncidentRetryButExtendsOtherQueuedRisk() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try GuardianEventStore(fileURL: directory.appendingPathComponent("state.json"))
+        let contact = try GuardianNotificationContact(dictionary: [
+            "id": "family", "name": "家人", "phone": "+8613800000000", "priority": 1])
+        try store.setNotificationContacts([contact])
+        try store.setMonitoringPolicy(GuardianMonitoringPolicy(mode: .standard), activeWindow: nil)
+        let check = riskCheck(0, battery: 10, blocker: .locationPermissionDisabled)
+        _ = try store.evaluateRisks(check, detectionContext: "background")
+        try store.updateCriticalMessagingAuthorizations([contact.applePhoneNumber: "approved"], at: check.date)
+        let operations = store.readyCriticalMessageOperations(at: check.date)
+        XCTAssertEqual(operations.count, 2)
+        _ = try XCTUnwrap(store.beginCriticalMessageAttempt(id: operations[0].id, at: check.date))
+        try store.completeCriticalMessageAttempt(id: operations[0].id, accepted: false,
+            retryable: true, at: check.date)
+        XCTAssertNil(try store.beginCriticalMessageAttempt(id: operations[1].id, at: check.date))
+        XCTAssertNotNil(try store.beginCriticalMessageAttempt(id: operations[0].id, at: check.date.addingTimeInterval(60)))
+        XCTAssertNil(try store.beginCriticalMessageAttempt(id: operations[1].id, at: check.date.addingTimeInterval(600)))
+        XCTAssertEqual(store.criticalMessageOperations.first { $0.id == operations[1].id }?.nextAttemptAt,
+                       check.date.addingTimeInterval(660))
+    }
+
     func testRejectsOldInaccurateAndFutureLocations() {
         let now = Date()
         XCTAssertFalse(GuardianLocationPolicy.accepts(location(time: now.addingTimeInterval(-121)), now: now))
@@ -332,6 +523,7 @@ final class GuardianCoreTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try GuardianEventStore(fileURL: directory.appendingPathComponent("state.json"))
+        try store.setMonitoringPolicy(GuardianMonitoringPolicy(mode: .standard), activeWindow: nil)
         let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
         var inactivity = GuardianInactivityState()
         inactivity.leaveHome(at: startedAt)
@@ -448,6 +640,7 @@ final class GuardianCoreTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try GuardianEventStore(fileURL: directory.appendingPathComponent("state.json"))
+        try store.setMonitoringPolicy(GuardianMonitoringPolicy(mode: .standard), activeWindow: nil)
         let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
         var inactivity = GuardianInactivityState()
         inactivity.leaveHome(at: startedAt)
@@ -486,6 +679,7 @@ final class GuardianCoreTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try GuardianEventStore(fileURL: directory.appendingPathComponent("state.json"))
+        try store.setMonitoringPolicy(GuardianMonitoringPolicy(mode: .standard), activeWindow: nil)
         let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
         let first = try GuardianNotificationContact(dictionary: [
             "id": "first", "name": "第一位", "phone": "+8613800000000", "priority": 1
@@ -554,6 +748,366 @@ final class GuardianCoreTests: XCTestCase {
         XCTAssertNil(restored.activeWindow)
         XCTAssertEqual(restored.inactivity.homePresence, .unknown)
         let migrated = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
-        XCTAssertEqual(migrated?["version"] as? Int, 5)
+        XCTAssertEqual(migrated?["version"] as? Int, 6)
+        XCTAssertEqual(restored.monitoringPolicy.mode, .test)
+    }
+
+    private func riskCheck(_ seconds: TimeInterval, battery: Int? = 80, charging: Bool? = false,
+                           home: GuardianHomePresence = .away, expected: Bool = true,
+                           blocker: GuardianLocationRiskReason? = nil, fix: TimeInterval? = nil,
+                           failed: Bool = false) -> GuardianRiskCheck {
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        return GuardianRiskCheck(date: base.addingTimeInterval(seconds), enabled: true,
+            homePresence: home, expectsLocation: expected, locationBlocker: blocker,
+            batteryLevel: battery, isCharging: charging,
+            trustedLocationAt: fix.map { base.addingTimeInterval($0) }, locationFailed: failed)
+    }
+
+    func testProductionRejectsShortFractionalAndBooleanThresholds() throws {
+        XCTAssertThrowsError(try GuardianMonitoringPolicy(mode: .standard,
+            noMotionThresholdMinutes: 1).validate())
+        XCTAssertThrowsError(try GuardianMonitoringPolicy(mode: .standard,
+            locationLostThresholdMinutes: 1).validate())
+        XCTAssertNoThrow(try GuardianMonitoringPolicy(noMotionThresholdMinutes: 1,
+            locationLostThresholdMinutes: 1).validate())
+        for invalid in [NSNumber(value: true), NSNumber(value: 1.5), NSNumber(value: 241)] {
+            XCTAssertThrowsError(try GuardianMonitoringPolicy(dictionary: [
+                "monitoringMode": "test", "noMotionThresholdMinutes": invalid,
+                "locationLostThresholdMinutes": 120
+            ]))
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try GuardianEventStore(fileURL: directory.appendingPathComponent("state.json"))
+        try store.setMonitoringPolicy(GuardianMonitoringPolicy(mode: .standard), activeWindow: nil)
+        XCTAssertThrowsError(try store.setNoMotionThresholdMinutes(1))
+        XCTAssertEqual(store.noMotionThresholdMinutes, 120)
+    }
+
+    func testBatteryUnknownAndHomeDoNotCreateRiskAndChargingResolvesOnce() {
+        var state = GuardianRiskState()
+        let policy = GuardianMonitoringPolicy()
+        XCTAssertTrue(state.evaluate(riskCheck(0, battery: nil, expected: false), policy: policy).isEmpty)
+        XCTAssertTrue(state.evaluate(riskCheck(1, battery: -1, expected: false), policy: policy).isEmpty)
+        XCTAssertTrue(state.evaluate(riskCheck(2, battery: 10, charging: nil, expected: false), policy: policy).isEmpty)
+        XCTAssertTrue(state.evaluate(riskCheck(3, battery: 10, home: .home, expected: false), policy: policy).isEmpty)
+        XCTAssertEqual(state.evaluate(riskCheck(4, battery: 19, expected: false), policy: policy), [.lowBattery])
+        XCTAssertTrue(state.evaluate(riskCheck(5, battery: 0, expected: false), policy: policy).isEmpty)
+        XCTAssertEqual(state.evaluate(riskCheck(6, battery: 5, charging: true, expected: false), policy: policy), [.batteryRecovered])
+        XCTAssertTrue(state.evaluate(riskCheck(7, battery: 5, charging: true, expected: false), policy: policy).isEmpty)
+        XCTAssertEqual(state.evaluate(riskCheck(8, battery: 5, expected: false), policy: policy), [.lowBattery])
+        XCTAssertEqual(state.evaluate(riskCheck(9, battery: 20, expected: false), policy: policy), [.batteryRecovered])
+    }
+
+    func testLocationDeadlineRecoveryRestAndPermissionCauses() {
+        var state = GuardianRiskState()
+        let policy = GuardianMonitoringPolicy(locationLostThresholdMinutes: 1)
+        XCTAssertTrue(state.evaluate(riskCheck(0, fix: 0), policy: policy).isEmpty)
+        XCTAssertTrue(state.evaluate(riskCheck(59), policy: policy).isEmpty)
+        XCTAssertEqual(state.evaluate(riskCheck(60), policy: policy), [.locationLost(.locationStale)])
+        XCTAssertTrue(state.evaluate(riskCheck(100), policy: policy).isEmpty)
+        XCTAssertEqual(state.evaluate(riskCheck(101, fix: 101), policy: policy), [.locationRestored])
+        XCTAssertTrue(state.evaluate(riskCheck(102, expected: false), policy: policy).isEmpty)
+        XCTAssertTrue(state.evaluate(riskCheck(1000, expected: false), policy: policy).isEmpty)
+        XCTAssertTrue(state.evaluate(riskCheck(1001), policy: policy).isEmpty)
+        XCTAssertEqual(state.evaluate(riskCheck(1002, blocker: .preciseLocationDisabled),
+            policy: policy), [.locationLost(.preciseLocationDisabled)])
+        XCTAssertTrue(state.evaluate(riskCheck(1003, blocker: .backgroundRefreshDisabled),
+            policy: policy).isEmpty)
+        XCTAssertEqual(state.locationReason, .backgroundRefreshDisabled)
+        // Restoring a permission alone is not a fresh position.
+        XCTAssertTrue(state.evaluate(riskCheck(1004), policy: policy).isEmpty)
+        XCTAssertNotNil(state.locationReason)
+        XCTAssertEqual(state.evaluate(riskCheck(1005, fix: 1005), policy: policy), [.locationRestored])
+        var capabilities = GuardianRiskState()
+        let longPolicy = GuardianMonitoringPolicy()
+        _ = capabilities.evaluate(riskCheck(0, blocker: .backgroundRefreshDisabled, fix: 0),
+            policy: longPolicy)
+        // An old sample collected while blocked cannot falsely certify recovery.
+        XCTAssertTrue(capabilities.evaluate(riskCheck(600), policy: longPolicy).isEmpty)
+        XCTAssertNotNil(capabilities.locationReason)
+        XCTAssertEqual(capabilities.evaluate(riskCheck(601, fix: 601),
+            policy: longPolicy), [.locationRestored])
+    }
+
+    func testLocationFailureAndRejectedOrFutureSamplesDoNotRenewDeadline() {
+        var state = GuardianRiskState()
+        let policy = GuardianMonitoringPolicy(locationLostThresholdMinutes: 1)
+        _ = state.evaluate(riskCheck(0), policy: policy)
+        XCTAssertTrue(state.evaluate(riskCheck(10, failed: true), policy: policy).isEmpty)
+        _ = state.evaluate(riskCheck(20, fix: 200), policy: policy)
+        XCTAssertNil(state.lastTrustedLocationAt)
+        XCTAssertEqual(state.evaluate(riskCheck(60), policy: policy), [.locationLost(.locationFailed)])
+        _ = state.evaluate(riskCheck(200, fix: 0), policy: policy)
+        XCTAssertNotNil(state.locationReason)
+        XCTAssertEqual(state.evaluate(riskCheck(201, fix: 201), policy: policy), [.locationRestored])
+    }
+
+    func testDetectorStateSurvivesSerializationAndClockRollback() throws {
+        var state = GuardianRiskState()
+        let policy = GuardianMonitoringPolicy(locationLostThresholdMinutes: 1)
+        _ = state.evaluate(riskCheck(100, battery: 10, fix: 100), policy: policy)
+        let data = try JSONEncoder().encode(state)
+        var restored = try JSONDecoder().decode(GuardianRiskState.self, from: data)
+        XCTAssertTrue(restored.evaluate(riskCheck(120, battery: 10), policy: policy).isEmpty)
+        XCTAssertTrue(restored.evaluate(riskCheck(0, battery: 10), policy: policy).isEmpty)
+        XCTAssertNil(restored.lastTrustedLocationAt)
+        XCTAssertEqual(restored.evaluate(riskCheck(60, battery: 10), policy: policy), [.locationLost(.locationStale)])
+    }
+
+    func testRiskEventsAndRecipientsAreAtomicAndDeduplicateAcrossReload() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("state.json")
+        let store = try GuardianEventStore(fileURL: url)
+        let contact = try GuardianNotificationContact(dictionary: [
+            "id": "family", "name": "家人", "phone": "+8613800000000", "priority": 1
+        ])
+        try store.setNotificationContacts([contact])
+        let first = try store.evaluateRisks(riskCheck(0, battery: 10,
+            blocker: .locationPermissionDisabled), detectionContext: "background")
+        XCTAssertEqual(first.map(\.type), [.lowBattery, .locationLost])
+        XCTAssertTrue(first.allSatisfy { $0.isTest == true && $0.title.contains("测试") })
+        XCTAssertEqual(store.criticalMessageOperations.count, 2)
+        XCTAssertTrue(store.criticalMessageOperations.allSatisfy { $0.isTest == true && $0.messageText.contains("测试") })
+        try store.acknowledge(Set(first.map(\.id)))
+        let restored = try GuardianEventStore(fileURL: url)
+        XCTAssertTrue(try restored.evaluateRisks(riskCheck(10, battery: 10,
+            blocker: .locationPermissionDisabled), detectionContext: "restoration").isEmpty)
+        XCTAssertTrue(restored.pendingEvents.isEmpty)
+        XCTAssertEqual(restored.criticalMessageOperations.count, 2)
+        try restored.updateCriticalMessagingAuthorizations([contact.applePhoneNumber: "approved"],
+            at: riskCheck(10).date)
+        XCTAssertTrue(restored.readyCriticalMessageOperations(at: riskCheck(10).date).isEmpty)
+        for operation in restored.criticalMessageOperations {
+            XCTAssertNil(try restored.beginCriticalMessageAttempt(id: operation.id, at: riskCheck(10).date))
+        }
+        let recovered = try restored.evaluateRisks(riskCheck(11, battery: 10, charging: true, fix: 11),
+            detectionContext: "foreground")
+        XCTAssertEqual(recovered.map(\.type), [.batteryRecovered, .locationRestored])
+        XCTAssertTrue(restored.criticalMessageOperations.allSatisfy { $0.status == .cancelled })
+    }
+
+    func testModeChangeCancelsTestOperationsAndRestartsDetectors() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try GuardianEventStore(fileURL: directory.appendingPathComponent("state.json"))
+        let contact = try GuardianNotificationContact(dictionary: [
+            "id": "family", "name": "家人", "phone": "+8613800000000", "priority": 1
+        ])
+        try store.setNotificationContacts([contact])
+        _ = try store.evaluateRisks(riskCheck(0, battery: 10), detectionContext: "foreground")
+        let testOperation = try XCTUnwrap(store.criticalMessageOperations.first)
+        try store.setMonitoringPolicy(GuardianMonitoringPolicy(mode: .standard), activeWindow: nil)
+        XCTAssertFalse(store.riskState.lowBatteryActive)
+        XCTAssertEqual(store.criticalMessageOperations.first?.status, .cancelled)
+        XCTAssertEqual(store.pendingEvents.last?.type, .guardianSessionReset)
+        _ = try store.evaluateRisks(riskCheck(10, battery: 10), detectionContext: "background")
+        try store.updateCriticalMessagingAuthorizations([contact.applePhoneNumber: "approved"], at: riskCheck(10).date)
+        XCTAssertNil(try store.beginCriticalMessageAttempt(id: testOperation.id, at: riskCheck(10).date))
+        XCTAssertEqual(store.readyCriticalMessageOperations(at: riskCheck(10).date).count, 1)
+        XCTAssertEqual(store.criticalMessageOperations.last?.isTest, false)
+        let locationOp = GuardianCriticalMessageOperation.prepare(for: GuardianEvent(type: .locationLost,
+            title: "位置", description: "精确位置已关闭", timestamp: Date(), source: "location"),
+            contacts: [contact], thresholdMinutes: 120)[0]
+        XCTAssertTrue(locationOp.messageText.contains("精确位置已关闭"))
+        XCTAssertFalse(locationOp.messageText.contains("没有明显活动"))
+    }
+
+    func testFailedRiskCommitDoesNotAdvanceDeduplicationState() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let parent = directory.appendingPathComponent("blocked")
+        let store = try GuardianEventStore(fileURL: parent.appendingPathComponent("state.json"))
+        try Data("not a directory".utf8).write(to: parent)
+        XCTAssertThrowsError(try store.evaluateRisks(riskCheck(0, battery: 10), detectionContext: "background"))
+        XCTAssertFalse(store.riskState.lowBatteryActive)
+        XCTAssertTrue(store.pendingEvents.isEmpty)
+        try FileManager.default.removeItem(at: parent)
+        XCTAssertEqual(try store.evaluateRisks(riskCheck(1, battery: 10),
+            detectionContext: "background").map(\.type), [.lowBattery])
+    }
+
+    func testVersionFiveShortThresholdMigratesToTestAndCancelsLegacyQueue() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("state.json")
+        let store = try GuardianEventStore(fileURL: url)
+        try store.setNoMotionThresholdMinutes(1)
+        let contact = try GuardianNotificationContact(dictionary: [
+            "id": "family", "name": "家人", "phone": "+8613800000000", "priority": 1
+        ])
+        try store.setNotificationContacts([contact])
+        var inactivity = GuardianInactivityState()
+        let date = Date()
+        inactivity.leaveHome(at: date.addingTimeInterval(-60))
+        XCTAssertTrue(inactivity.evaluate(at: date, thresholdMinutes: 1))
+        let risk = GuardianEvent(type: .noMotionForLongTime, title: "旧告警", description: "旧告警",
+            timestamp: date, source: "motion")
+        try store.append(risk, updatingInactivity: inactivity, criticalMessages:
+            GuardianCriticalMessageOperation.prepare(for: risk, contacts: [contact], thresholdMinutes: 1))
+        var raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        raw["version"] = 5
+        raw.removeValue(forKey: "monitoringPolicy")
+        raw.removeValue(forKey: "riskState")
+        raw.removeValue(forKey: "activeRiskEventIds")
+        try JSONSerialization.data(withJSONObject: raw).write(to: url)
+        let migrated = try GuardianEventStore(fileURL: url)
+        XCTAssertEqual(migrated.monitoringPolicy.mode, .test)
+        XCTAssertEqual(migrated.noMotionThresholdMinutes, 1)
+        XCTAssertEqual(migrated.notificationContacts, [contact])
+        XCTAssertTrue(migrated.pendingEvents.contains { $0.id == risk.id })
+        XCTAssertEqual(migrated.pendingEvents.last?.type, .guardianSessionReset)
+        XCTAssertFalse(migrated.hasUnresolvedInactivityIncident)
+        XCTAssertTrue(migrated.criticalMessageOperations.allSatisfy { $0.status == .cancelled })
+    }
+
+    func testClearLocalDataErasesConfigurationRiskQueueAndAuthorizationsAcrossReload() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("state.json")
+        let store = try GuardianEventStore(fileURL: url)
+        let fence = try GuardianGeofence(dictionary: [
+            "id": "home", "kind": "home", "name": "家", "radiusMeters": 150.0,
+            "center": ["latitude": 30.0, "longitude": 120.0]
+        ])
+        let contact = try GuardianNotificationContact(dictionary: [
+            "id": "family", "name": "家人", "phone": "+8613800000000", "priority": 1
+        ])
+        try store.configure(enabled: true, geofences: [fence], notificationContacts: [contact])
+        try store.updateCriticalMessagingAuthorizations([contact.applePhoneNumber: "approved"])
+        try store.setMovementAnchor(GuardianMovementAnchor(location(time: Date())))
+        _ = try store.evaluateRisks(riskCheck(0, battery: 10, blocker: .locationPermissionDisabled),
+                                   detectionContext: "background")
+        XCTAssertFalse(store.pendingEvents.isEmpty)
+        XCTAssertFalse(store.criticalMessageOperations.isEmpty)
+        try store.clearLocalData()
+        // Explicit clear must be idempotent after a JS completion-write failure.
+        try store.clearLocalData()
+        let restored = try GuardianEventStore(fileURL: url)
+        XCTAssertFalse(restored.enabled)
+        XCTAssertTrue(restored.geofences.isEmpty)
+        XCTAssertTrue(restored.notificationContacts.isEmpty)
+        XCTAssertTrue(restored.criticalMessagingAuthorizations.isEmpty)
+        XCTAssertTrue(restored.pendingEvents.isEmpty)
+        XCTAssertTrue(restored.criticalMessageOperations.isEmpty)
+        XCTAssertEqual(restored.riskState, GuardianRiskState())
+        XCTAssertNil(restored.movementAnchor)
+        XCTAssertNil(restored.activeWindow)
+        XCTAssertEqual(restored.monitoringPolicy.mode, .test)
+        XCTAssertEqual(try directory.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+    }
+
+    func testFailedClearRetainsInMemoryStateAndSupportsRetry() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let parent = directory.appendingPathComponent("store")
+        let held = directory.appendingPathComponent("held")
+        let store = try GuardianEventStore(fileURL: parent.appendingPathComponent("state.json"))
+        let event = GuardianEvent(type: .sosSent, title: "求助", description: "待处理",
+                                  timestamp: Date(), source: "user")
+        try store.append(event)
+        try FileManager.default.moveItem(at: parent, to: held)
+        try Data("blocked".utf8).write(to: parent)
+        XCTAssertThrowsError(try store.clearLocalData())
+        XCTAssertEqual(store.pendingEvents.map(\.id), [event.id])
+        try FileManager.default.removeItem(at: parent)
+        try FileManager.default.moveItem(at: held, to: parent)
+        try store.clearLocalData()
+        XCTAssertTrue(store.pendingEvents.isEmpty)
+    }
+
+    func testNativeDeletionIntentSurvivesRestartAndRejectsOldJSConfiguration() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("state.json")
+        let store = try GuardianEventStore(fileURL: url)
+        try store.configure(enabled: true, geofences: [])
+        try store.beginDataDeletion()
+        let restored = try GuardianEventStore(fileURL: url)
+        XCTAssertTrue(restored.dataDeletionPending)
+        XCTAssertFalse(restored.enabled)
+        XCTAssertThrowsError(try restored.configure(enabled: true, geofences: []))
+        XCTAssertThrowsError(try restored.setNotificationContacts([]))
+        XCTAssertThrowsError(try restored.setMonitoringPolicy(GuardianMonitoringPolicy(), activeWindow: nil))
+        XCTAssertTrue(try restored.evaluateRisks(riskCheck(0, battery: 10), detectionContext: "restoration").isEmpty)
+        try restored.clearLocalData()
+        XCTAssertFalse(try GuardianEventStore(fileURL: url).dataDeletionPending)
+    }
+
+    func testCorruptNativeFileIsUntouchedUntilExplicitDeletionIsRequested() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("state.json")
+        let original = Data("corrupt-private-state".utf8)
+        try original.write(to: url)
+        XCTAssertThrowsError(try GuardianEventStore(fileURL: url))
+        XCTAssertEqual(try Data(contentsOf: url), original)
+        let deleting = try GuardianEventStore(fileURL: url, resettingForDeletion: true)
+        XCTAssertTrue(deleting.dataDeletionPending)
+        XCTAssertFalse(deleting.enabled)
+        try deleting.clearLocalData()
+        XCTAssertTrue(try GuardianEventStore(fileURL: url).pendingEvents.isEmpty)
+    }
+
+    func testMessageRetentionLimitsOnlyCompletedOperationsAndNeverDropsPendingEvents() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try GuardianEventStore(fileURL: directory.appendingPathComponent("state.json"))
+        let now = Date()
+        let contact = try GuardianNotificationContact(dictionary: [
+            "id": "family", "name": "家人", "phone": "+8613800000000", "priority": 1
+        ])
+        for index in 0..<110 {
+            let event = GuardianEvent(type: .lowBattery, title: "历史", description: "历史",
+                timestamp: now.addingTimeInterval(Double(index)), source: "battery")
+            var operations = GuardianCriticalMessageOperation.prepare(for: event, contacts: [contact],
+                                                                      thresholdMinutes: 120)
+            operations[0].status = .cancelled
+            try store.append(event, updatingInactivity: GuardianInactivityState(), criticalMessages: operations)
+        }
+        XCTAssertEqual(store.criticalMessageOperations.count, 100)
+        XCTAssertEqual(store.pendingEvents.count, 110)
+        let pending = GuardianEvent(type: .locationLost, title: "待处理", description: "待处理",
+                                    timestamp: now, source: "location")
+        try store.append(pending, updatingInactivity: GuardianInactivityState(),
+            criticalMessages: GuardianCriticalMessageOperation.prepare(for: pending, contacts: [contact],
+                                                                       thresholdMinutes: 120))
+        XCTAssertEqual(store.criticalMessageOperations.count, 101)
+        try store.pruneHistory(at: now.addingTimeInterval(31 * 24 * 60 * 60))
+        XCTAssertEqual(store.criticalMessageOperations.map(\.eventId), [pending.id])
+        XCTAssertEqual(store.pendingEvents.count, 111)
+    }
+
+    func testRetentionKeepsAnActiveRiskEvenWhenItsMessageIsTerminal() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try GuardianEventStore(fileURL: directory.appendingPathComponent("state.json"))
+        let contact = try GuardianNotificationContact(dictionary: [
+            "id": "family", "name": "家人", "phone": "+8613800000000", "priority": 1
+        ])
+        try store.setNotificationContacts([contact])
+        _ = try store.evaluateRisks(riskCheck(0, battery: 10), detectionContext: "foreground")
+        let future = riskCheck(0).date.addingTimeInterval(40 * 24 * 60 * 60)
+        _ = try store.reconcileCriticalMessages(at: future)
+        XCTAssertEqual(store.criticalMessageOperations.first?.status, .expired)
+        try store.pruneHistory(at: future.addingTimeInterval(40 * 24 * 60 * 60))
+        XCTAssertEqual(store.criticalMessageOperations.count, 1)
+        XCTAssertTrue(store.riskState.lowBatteryActive)
+    }
+
+    func testSleepingAcrossRestPeriodDoesNotCarryPositionTimeoutIntoNextDay() {
+        var state = GuardianRiskState()
+        let policy = GuardianMonitoringPolicy(locationLostThresholdMinutes: 1)
+        _ = state.evaluate(riskCheck(0), policy: policy)
+        XCTAssertEqual(state.evaluate(riskCheck(60), policy: policy), [.locationLost(.locationStale)])
+        var nextDay = riskCheck(86_410)
+        nextDay.activePeriodStart = riskCheck(86_400).date
+        XCTAssertEqual(state.evaluate(nextDay, policy: policy), [.locationPeriodReset])
+        XCTAssertNil(state.locationReason)
+        XCTAssertTrue(state.evaluate(riskCheck(86_469), policy: policy).isEmpty)
+        XCTAssertEqual(state.evaluate(riskCheck(86_470), policy: policy), [.locationLost(.locationStale)])
     }
 }

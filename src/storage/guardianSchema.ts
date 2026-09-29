@@ -10,13 +10,15 @@ import {
 import type { GuardianConfig, GuardianEvent } from '../domain/types';
 
 export interface GuardianStoredState {
-  schemaVersion: 3;
+  schemaVersion: 4;
   config: GuardianConfig;
   localEvents: GuardianEvent[];
   isGuardianOn: boolean;
   isGuardianPaused: boolean;
   mode: 'demo' | 'device';
   updatedAt: string;
+  // Durable deletion journal: startup must not re-sync old native data until clear completes.
+  dataDeletionPending?: boolean;
 }
 
 export function createInitialStoredState(
@@ -29,7 +31,7 @@ export function createInitialStoredState(
     config.geofences = [];
   }
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     config,
     localEvents: mode === 'demo' ? createDemoEvents(now) : [],
     isGuardianOn: mode === 'demo',
@@ -43,16 +45,28 @@ export function parseStoredState(value: unknown): GuardianStoredState {
   if (!isRecord(value) || !Array.isArray(value.localEvents) || !isTimestamp(value.updatedAt))
     throw new Error('本机数据格式损坏，读取已停止。');
   const legacy = value.schemaVersion === undefined || value.schemaVersion === 1;
+  if (value.dataDeletionPending !== undefined && typeof value.dataDeletionPending !== 'boolean')
+    throw new Error('本机数据清除状态无效。');
   const version2 = value.schemaVersion === 2;
-  if (!legacy && !version2 && value.schemaVersion !== 3)
+  if (!legacy && !version2 && value.schemaVersion !== 3 && value.schemaVersion !== 4)
     throw new Error('本机数据版本不受支持。');
-  const config = parseGuardianConfig(value.config);
+  const rawConfig = value.config;
+  const config = parseGuardianConfig(
+    value.schemaVersion !== 4 && isRecord(rawConfig) && isRecord(rawConfig.schedule)
+      ? { ...rawConfig, schedule: {
+          ...rawConfig.schedule,
+          monitoringMode: 'test',
+          locationLostThresholdMinutes: 120,
+        } }
+      : rawConfig,
+  );
   if (
     !legacy &&
     (typeof value.isGuardianOn !== 'boolean' || !['demo', 'device'].includes(String(value.mode)))
   )
     throw new Error('本机运行状态无效。');
-  if (value.schemaVersion === 3 && typeof value.isGuardianPaused !== 'boolean')
+  if ((value.schemaVersion === 3 || value.schemaVersion === 4) &&
+      typeof value.isGuardianPaused !== 'boolean')
     throw new Error('本机守护偏好无效。');
   let cursor = new Date(value.updatedAt);
   const events: GuardianEvent[] = [];
@@ -75,15 +89,16 @@ export function parseStoredState(value: unknown): GuardianStoredState {
   const mode = legacy ? 'demo' : (value.mode as GuardianStoredState['mode']);
   const isGuardianOn = legacy ? true : (value.isGuardianOn as boolean);
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     config,
     localEvents: orderGuardianEvents(events.reverse()),
     isGuardianOn,
     isGuardianPaused:
-      value.schemaVersion === 3
+      value.schemaVersion === 3 || value.schemaVersion === 4
         ? (value.isGuardianPaused as boolean)
         : mode === 'device' && !isGuardianOn && config.geofences.length > 0,
     mode,
     updatedAt: new Date(value.updatedAt).toISOString(),
+    ...(value.dataDeletionPending ? { dataDeletionPending: true } : {}),
   };
 }

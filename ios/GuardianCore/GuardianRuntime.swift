@@ -15,6 +15,12 @@ private enum GuardianReliabilityDiagnostics {
         defaults.set(reason, forKey: wakeReasonKey)
     }
 
+    static func clear() {
+        for key in [wakeAtKey, wakeReasonKey, restoreAtKey, restoreSucceededKey, backgroundAtKey, nextCheckAtKey] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+
     static func recordRestore(success: Bool, at date: Date = Date()) {
         let defaults = UserDefaults.standard
         defaults.set(date, forKey: restoreAtKey)
@@ -125,9 +131,9 @@ final class GuardianRuntime {
         prepare()
     }
 
-    private func prepare() {
+    private func prepare(resettingForDeletion: Bool = false) {
         do {
-            let store = try GuardianEventStore()
+            let store = try GuardianEventStore(resettingForDeletion: resettingForDeletion)
             let service = GuardianLocationService(store: store)
             let messagingCoordinator = GuardianCriticalMessagingCoordinator(store: store)
             self.store = store
@@ -164,6 +170,7 @@ final class GuardianRuntime {
     }
 
     func record(_ event: GuardianEvent) throws {
+        guard store?.dataDeletionPending != true else { return }
         unsaved.append(event)
         try flush()
     }
@@ -183,6 +190,31 @@ final class GuardianRuntime {
 
     func clearLastError() {
         lastError = nil
+    }
+
+    func clearLocalData() throws {
+        let service = try requireService()
+        guard try requireStore().dataDeletionPending else { throw GuardianCoreError.invalidConfiguration }
+        messagingCoordinator?.cancelPendingWork()
+        // Retain the native tombstone if any historical copy cannot be cleared.
+        // No ordinary startup/metadata upgrade deletes legacy user data.
+        try GuardianStorageProtection.clearLegacyGuardianData()
+        try service.clearLocalData()
+        unsaved = []
+        GuardianBackgroundScheduler.shared.schedule(at: nil, source: .guardian)
+        GuardianBackgroundScheduler.shared.schedule(at: nil, source: .criticalMessaging)
+        GuardianReliabilityDiagnostics.clear()
+        lastError = nil
+        onMessagingUpdate?()
+    }
+
+    func beginDataDeletion() throws {
+        if service == nil { prepare(resettingForDeletion: true) }
+        let service = try requireService()
+        messagingCoordinator?.cancelPendingWork()
+        try service.beginDataDeletion()
+        GuardianBackgroundScheduler.shared.schedule(at: nil, source: .guardian)
+        GuardianBackgroundScheduler.shared.schedule(at: nil, source: .criticalMessaging)
     }
 
     var reliabilityDiagnostics: [String: Any] {

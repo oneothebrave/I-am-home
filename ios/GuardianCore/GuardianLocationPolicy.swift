@@ -34,6 +34,11 @@ struct GuardianLocationMovementAssessment {
 enum GuardianLocationPolicy {
     static let minimumStepDelta = 5
 
+    static func chronologicalAnchor(_ location: CLLocation?, now: Date) -> CLLocation? {
+        guard let location, location.timestamp <= now.addingTimeInterval(5) else { return nil }
+        return location
+    }
+
     static func accepts(_ location: CLLocation, now: Date = Date()) -> Bool {
         let age = now.timeIntervalSince(location.timestamp)
         return (-5...120).contains(age) && location.horizontalAccuracy.isFinite

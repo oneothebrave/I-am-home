@@ -19,7 +19,7 @@ export type GuardianControlState = {
 
 type NativeGuardianController = {
   getCurrentStatus: () => Promise<GuardianNativeStatus>;
-  startGuardian: (config: GuardianConfig) => Promise<void>;
+  startGuardian: (config: GuardianConfig, resumePaused: boolean) => Promise<void>;
   stopGuardian: () => Promise<void>;
 };
 
@@ -39,6 +39,7 @@ export function startGuardianControl(
 ) {
   let queue = Promise.resolve();
   let stopped = false;
+  let refreshRequest: Promise<void> | undefined;
 
   const emit = (state: GuardianControlState) => {
     if (!stopped) onState(state);
@@ -74,7 +75,8 @@ export function startGuardianControl(
 
   return {
     refresh() {
-      return enqueue(async () => {
+      if (refreshRequest) return refreshRequest;
+      const request = enqueue(async () => {
         emit({ phase: 'checking' });
         try {
           accept(await native.getCurrentStatus());
@@ -84,17 +86,23 @@ export function startGuardianControl(
           throw error;
         }
       });
+      refreshRequest = request;
+      const clear = () => { if (refreshRequest === request) refreshRequest = undefined; };
+      request.then(clear, clear);
+      return request;
     },
-    setEnabled(enabled: boolean, config: GuardianConfig) {
+    setEnabled(enabled: boolean, config: GuardianConfig, resumePaused = false) {
+      // A refresh requested after this write must not reuse its pre-write read.
+      refreshRequest = undefined;
       return enqueue(async () => {
         emit({ phase: enabled ? 'starting' : 'stopping' });
         try {
-          if (enabled) await native.startGuardian(config);
+          if (enabled) await native.startGuardian(config, resumePaused);
           else await native.stopGuardian();
           const status = await native.getCurrentStatus();
           const confirmed = enabled
-            ? status.isGuardianOn && status.isMonitoring
-            : !status.isGuardianOn && !status.isMonitoring;
+            ? status.isGuardianOn && status.isMonitoring && status.isGuardianPaused === false
+            : !status.isGuardianOn && !status.isMonitoring && status.isGuardianPaused === true;
           if (!confirmed) throw new Error('原生守护状态与本次操作不一致，请重试。');
           accept(status);
         } catch (error) {

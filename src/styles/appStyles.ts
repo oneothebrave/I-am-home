@@ -16,56 +16,6 @@ export const styles = StyleSheet.create({
     paddingTop: 22,
     paddingBottom: 32,
   },
-  header: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 12,
-  },
-  appName: {
-    color: '#1F211D',
-    fontSize: 30,
-    fontWeight: '800',
-  },
-  subtleText: {
-    color: '#6D6A61',
-    fontSize: 14,
-    marginTop: 6,
-  },
-  runtimeText: {
-    color: '#8A2E22',
-    fontSize: 13,
-    lineHeight: 18,
-    marginTop: 4,
-    paddingRight: 12,
-  },
-  runtimeTextMonitoring: {
-    color: '#235D4C',
-  },
-  guardianSwitch: {
-    alignItems: 'center',
-    borderRadius: 8,
-    minWidth: 68,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  switchOn: {
-    backgroundColor: '#235D4C',
-  },
-  switchOff: {
-    backgroundColor: '#E6DFD3',
-  },
-  switchText: {
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  switchTextOn: {
-    color: '#FFFFFF',
-  },
-  switchTextOff: {
-    color: '#5E584D',
-  },
   tabBar: {
     backgroundColor: '#FFFDF8',
     borderColor: '#E5DED2',
@@ -93,62 +43,9 @@ export const styles = StyleSheet.create({
   flexItem: {
     flex: 1,
   },
-  statusPanel: {
-    borderRadius: 8,
-    padding: 18,
-  },
-  statusRow: {
-    alignItems: 'flex-start',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
   statusLabel: {
     fontSize: 16,
     fontWeight: '700',
-  },
-  statusHeadline: {
-    color: '#1F211D',
-    fontSize: 28,
-    fontWeight: '800',
-    marginTop: 8,
-  },
-  statusDot: {
-    borderRadius: 10,
-    height: 20,
-    marginLeft: 12,
-    width: 20,
-  },
-  statusDetail: {
-    color: '#3D3932',
-    fontSize: 16,
-    lineHeight: 23,
-    marginTop: 14,
-  },
-  metricsRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 18,
-  },
-  metric: {
-    backgroundColor: 'rgba(255, 255, 255, 0.58)',
-    borderRadius: 8,
-    flex: 1,
-    padding: 12,
-  },
-  metricLabel: {
-    color: '#716A5F',
-    fontSize: 12,
-  },
-  metricValue: {
-    color: '#24211D',
-    fontSize: 18,
-    fontWeight: '700',
-    marginTop: 4,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 16,
   },
   primaryButton: {
     alignItems: 'center',
@@ -163,18 +60,6 @@ export const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '800',
-  },
-  dangerButton: {
-    alignItems: 'center',
-    backgroundColor: '#8A2E22',
-    borderRadius: 8,
-    flex: 1,
-    paddingVertical: 15,
-  },
-  dangerButtonText: {
-    color: '#FFFFFF',
-    fontSize: 17,
-    fontWeight: '700',
   },
   section: {
     marginTop: 24,
@@ -203,40 +88,6 @@ export const styles = StyleSheet.create({
     lineHeight: 22,
     marginTop: 5,
   },
-  summaryGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  summaryPill: {
-    backgroundColor: '#FFFFFF',
-    borderColor: '#E4DED2',
-    borderRadius: 8,
-    borderWidth: 1,
-    padding: 14,
-    width: '48%',
-  },
-  summaryLabel: {
-    color: '#756F64',
-    fontSize: 13,
-  },
-  summaryValue: {
-    color: '#25221D',
-    fontSize: 16,
-    fontWeight: '800',
-    marginTop: 6,
-  },
-  placeRow: {
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderColor: '#E4DED2',
-    borderRadius: 8,
-    borderWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-    padding: 14,
-  },
   rowTitle: {
     color: '#24211D',
     fontSize: 17,
@@ -247,18 +98,6 @@ export const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     marginTop: 4,
-  },
-  rowBadge: {
-    backgroundColor: '#E7F1EC',
-    borderRadius: 8,
-    marginLeft: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-  },
-  rowBadgeText: {
-    color: '#235D4C',
-    fontSize: 13,
-    fontWeight: '800',
   },
   contactRow: {
     alignItems: 'center',
@@ -276,12 +115,6 @@ export const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     marginLeft: 12,
-  },
-  inlineActions: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 6,
-    marginLeft: 8,
   },
   iconButton: {
     alignItems: 'center',
@@ -355,30 +188,6 @@ export const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
     fontWeight: '700',
   },
-  segmentRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 10,
-  },
-  segmentButton: {
-    alignItems: 'center',
-    backgroundColor: '#ECE6DB',
-    borderRadius: 8,
-    flex: 1,
-    minHeight: 42,
-    justifyContent: 'center',
-  },
-  segmentButtonActive: {
-    backgroundColor: '#235D4C',
-  },
-  segmentText: {
-    color: '#635E54',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  segmentTextActive: {
-    color: '#FFFFFF',
-  },
   stepperRow: {
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
@@ -437,92 +246,6 @@ export const styles = StyleSheet.create({
     color: '#6D665C',
     fontSize: 16,
     fontWeight: '700',
-  },
-  exerciseRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 10,
-  },
-  exerciseButton: {
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderColor: '#DCD4C8',
-    borderRadius: 8,
-    borderWidth: 1,
-    flex: 1,
-    minHeight: 48,
-    justifyContent: 'center',
-  },
-  exerciseButtonText: {
-    color: '#235D4C',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  exerciseDangerButton: {
-    alignItems: 'center',
-    backgroundColor: '#8A2E22',
-    borderRadius: 8,
-    minHeight: 48,
-    justifyContent: 'center',
-  },
-  exerciseDangerText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  escalationPanel: {
-    backgroundColor: '#FFFFFF',
-    borderColor: '#E4DED2',
-    borderRadius: 8,
-    borderWidth: 1,
-    marginBottom: 10,
-    padding: 14,
-  },
-  escalationTitle: {
-    color: '#25221D',
-    fontSize: 17,
-    fontWeight: '800',
-  },
-  escalationDescription: {
-    color: '#6B655B',
-    fontSize: 15,
-    lineHeight: 21,
-    marginTop: 6,
-  },
-  eventRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 16,
-  },
-  eventTime: {
-    color: '#716A5F',
-    fontSize: 14,
-    paddingTop: 14,
-    width: 44,
-  },
-  eventBody: {
-    backgroundColor: '#FFFFFF',
-    borderColor: '#E4DED2',
-    borderRadius: 8,
-    borderWidth: 1,
-    flex: 1,
-    padding: 14,
-  },
-  eventTitle: {
-    color: '#25221D',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  eventDescription: {
-    color: '#6B655B',
-    fontSize: 14,
-    lineHeight: 20,
-    marginTop: 5,
-  },
-  eventMeta: {
-    color: '#8A8377',
-    fontSize: 12,
-    marginTop: 8,
   },
   screenTitle: {
     color: '#1F211D',
@@ -659,9 +382,6 @@ export const styles = StyleSheet.create({
     lineHeight: 19,
     marginTop: 10,
   },
-  sectionHeaderRow: {
-    marginTop: 28,
-  },
   emptyStateCard: {
     backgroundColor: '#FFFDF9',
     borderColor: '#E5DED2',
@@ -681,29 +401,6 @@ export const styles = StyleSheet.create({
     lineHeight: 24,
     marginTop: 8,
     textAlign: 'center',
-  },
-  simpleEventRow: {
-    alignItems: 'center',
-    borderBottomColor: '#E5DED2',
-    borderBottomWidth: 1,
-    flexDirection: 'row',
-    paddingVertical: 15,
-  },
-  simpleEventTime: {
-    color: '#786F64',
-    fontSize: 15,
-    marginRight: 16,
-    width: 48,
-  },
-  simpleEventTitle: {
-    color: '#2C2924',
-    fontSize: 17,
-    fontWeight: '700',
-  },
-  simpleEventMeta: {
-    color: '#837B70',
-    fontSize: 13,
-    marginTop: 4,
   },
   footprintPrivacyCard: {
     backgroundColor: '#E9F1ED',

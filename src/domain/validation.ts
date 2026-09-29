@@ -95,10 +95,17 @@ export function parseGuardianConfig(value: unknown): GuardianConfig {
     '时间格式应为 HH:mm。',
   );
   check(schedule.startTime < schedule.expectedReturnTime, '结束时间应晚于开始时间。');
+  check(['standard', 'test'].includes(String(schedule.monitoringMode)), '守护模式无效。');
+  const minimum = schedule.monitoringMode === 'test' ? 1 : 15;
   check(
-    numberIn(schedule.noMotionThresholdMinutes, 1, 240) &&
+    numberIn(schedule.noMotionThresholdMinutes, minimum, 240) &&
       Number.isInteger(schedule.noMotionThresholdMinutes),
-    '停留阈值应在 1 至 240 分钟之间。',
+    '停留阈值应在 ' + minimum + ' 至 240 分钟之间；短时测试请先进入测试模式。',
+  );
+  check(
+    numberIn(schedule.locationLostThresholdMinutes, minimum, 240) &&
+      Number.isInteger(schedule.locationLostThresholdMinutes),
+    '位置中断阈值应在 ' + minimum + ' 至 240 分钟之间。',
   );
   check(
     numberIn(schedule.escalationDelayMinutes, 5, 60) &&
@@ -115,6 +122,9 @@ const eventTypes: GuardianEventType[] = [
   'RETURN_HOME',
   'LONG_STAY',
   'LOW_BATTERY',
+  'BATTERY_RECOVERED',
+  'LOCATION_RESTORED',
+  'GUARDIAN_SESSION_RESET',
   'LOCATION_LOST',
   'LOCATION_UPDATED',
   'ENTER_WAYPOINT',
@@ -152,6 +162,8 @@ export function parseGuardianEvent(value: unknown): GuardianEvent {
   for (const key of ['incidentId', 'contactId', 'geofenceId', 'locationLabel'])
     check(value[key] === undefined || text(value[key]), '事件标识无效。');
   check(value.simulated === undefined || typeof value.simulated === 'boolean', '演练标识无效。');
+  check(value.isTest === undefined || typeof value.isTest === 'boolean', '测试标识无效。');
+  check(value.riskReason === undefined || text(value.riskReason), '风险原因无效。');
   return {
     ...value,
     timestamp: new Date(value.timestamp).toISOString(),

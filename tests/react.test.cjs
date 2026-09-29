@@ -46,7 +46,6 @@ const { MyScreen } = load('src/screens/MyScreen.tsx');
 const {
   DiagnosticsScreen,
   buildGuardianDiagnosticReport,
-  buildGuardianDiagnosticSections,
   buildGuardianLatestRiskTimeline,
   buildGuardianRecentConfirmation,
   buildGuardianTodayTimeline,
@@ -170,12 +169,14 @@ test('status location uses a named guardian place and radius instead of coordina
             description: '测试',
             timestamp: '2026-09-21T01:00:00.000Z',
             source: 'location',
-            location: { latitude: 30.0001, longitude: 120.0001 },
+            location: { latitude: 30.0001, longitude: 120.0001, accuracy: 10 },
           },
         ],
         locationLabel: '30.0001, 120.0001',
       },
       geofences,
+      undefined,
+      Date.parse('2026-09-21T01:00:01Z'),
     ),
     { label: '菜园', radius: '周围 300 米' },
   );
@@ -209,7 +210,7 @@ test('a fresh foreground location replaces stale home and away labels', () => {
       longitude: 120.01,
       accuracy: 10,
       timestamp: '2026-09-21T02:00:00.000Z',
-    }),
+    }, Date.parse('2026-09-21T02:00:01Z')),
     { label: '守护地点外', radius: '未进入已设置地点' },
   );
 
@@ -233,8 +234,8 @@ test('a fresh foreground location replaces stale home and away labels', () => {
       longitude: 120,
       accuracy: 10,
       timestamp: '2026-09-21T04:00:00.000Z',
-    }),
-    { label: '家中', radius: '周围 150 米' },
+    }, Date.parse('2026-09-21T04:00:01Z')),
+    { label: '家的范围内', radius: '周围 150 米' },
   );
 });
 
@@ -243,15 +244,15 @@ test('cached coordinates on a newer risk event do not hide the farm GPS fix', ()
     center: { latitude: 30, longitude: 120 }, radiusMeters: 150 };
   const snapshot = { locationLabel: '家外', events: [
     { id: 'gps', type: 'LOCATION_UPDATED', source: 'location',
-      timestamp: '2026-09-21T01:00:00Z', location: farm.center },
+      timestamp: '2026-09-21T01:00:00Z', location: { ...farm.center, accuracy: 10 } },
     { id: 'risk', type: 'NO_MOTION_FOR_LONG_TIME', source: 'motion',
       timestamp: '2026-09-21T01:02:00Z', location: { latitude: 31, longitude: 121 } },
   ] };
-  assert.deepEqual(describeCurrentPlace(snapshot, [farm]),
+  assert.deepEqual(describeCurrentPlace(snapshot, [farm], undefined, Date.parse('2026-09-21T01:02:00Z')),
     { label: '农场', radius: '周围 150 米' });
   assert.deepEqual(describeCurrentPlace(snapshot, [farm], {
     ...farm.center, accuracy: 5, timestamp: '2026-09-21T01:01:00Z',
-  }), { label: '农场', radius: '周围 150 米' });
+  }, Date.parse('2026-09-21T01:02:00Z')), { label: '农场', radius: '周围 150 米' });
 });
 
 test('React StrictMode loads once and renders an SOS queued before hydration', async () => {
@@ -560,15 +561,9 @@ test('guardian diagnostics explain background health without exposing coordinate
       ],
     },
   };
-  const sections = buildGuardianDiagnosticSections(input);
-  const copy = sections.flatMap((section) => section.rows.map((row) => row.value)).join('\n');
-  assert.match(copy, /定位事件唤醒/);
-  assert.match(copy, /农场/);
-  assert.match(copy, /精度约 8 米/);
-  assert.match(copy, /重新检测到活动/);
-
   const report = buildGuardianDiagnosticReport(input);
   assert.match(report, /报告不包含电话号码、短信正文或经纬度/);
+  assert.match(report, /定位事件唤醒/);
   assert.doesNotMatch(report, /30\.123456|120\.654321|18768106491/);
 
   const recent = buildGuardianRecentConfirmation(input);
@@ -596,6 +591,9 @@ test('guardian diagnostics explain background health without exposing coordinate
     .map((node) => node.children.join(''))
     .join('\n');
   assert.match(screenCopy, /最近确认/);
+  assert.match(screenCopy, /农场/);
+  assert.match(screenCopy, /精度约 8 米/);
+  assert.match(screenCopy, /重新检测到活动/);
   assert.match(screenCopy, /今天的守护记录/);
   assert.match(screenCopy, /最近一次风险/);
   assert.match(screenCopy, /下一次系统机会/);
@@ -618,7 +616,7 @@ test('guardian rules no longer expose a notification escalation delay', async ()
     .findAllByType('Text')
     .map((node) => node.children.join(''))
     .join('\n');
-  assert.match(copy, /只在这个时段判断家外长时间无活动/);
+  assert.match(copy, /家外无活动和位置过旧只在这个时段判断/);
   assert.doesNotMatch(copy, /预计回家/);
   assert.doesNotMatch(copy, /通知升级|分钟后通知家人/);
   await act(async () => renderer.unmount());
@@ -690,7 +688,7 @@ test('device place flow gets the current location before saving the chosen radiu
   });
   assert.deepEqual(saved, [
     {
-      place: { name: '家', kind: 'home', radiusMeters: 150 },
+      place: { id: saved[0].place.id, name: '家', kind: 'home', radiusMeters: 150 },
       sample: {
         latitude: 30,
         longitude: 120,

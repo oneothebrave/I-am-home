@@ -12,15 +12,6 @@ export function Section({ title, children }: { title: string; children: React.Re
   );
 }
 
-export function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.metric}>
-      <Text style={styles.metricLabel}>{label}</Text>
-      <Text style={styles.metricValue}>{value}</Text>
-    </View>
-  );
-}
-
 export function InfoLine({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.infoLine}>
@@ -31,6 +22,7 @@ export function InfoLine({ label, value }: { label: string; value: string }) {
 }
 
 export function StepperSetting({
+  disabled = false,
   label,
   max,
   min,
@@ -39,6 +31,7 @@ export function StepperSetting({
   suffix,
   value,
 }: {
+  disabled?: boolean;
   label: string;
   max: number;
   min: number;
@@ -58,26 +51,19 @@ export function StepperSetting({
       <View style={styles.stepperActions}>
         <TouchableOpacity
           activeOpacity={0.8}
+          disabled={disabled || value <= min}
           onPress={() => onChange(clamp(value - step, min, max))}
           style={styles.iconButton}>
           <Text style={styles.iconButtonText}>-</Text>
         </TouchableOpacity>
         <TouchableOpacity
           activeOpacity={0.8}
+          disabled={disabled || value >= max}
           onPress={() => onChange(clamp(value + step, min, max))}
           style={styles.iconButton}>
           <Text style={styles.iconButtonText}>+</Text>
         </TouchableOpacity>
       </View>
-    </View>
-  );
-}
-
-export function SummaryPill({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.summaryPill}>
-      <Text style={styles.summaryLabel}>{label}</Text>
-      <Text style={styles.summaryValue}>{value}</Text>
     </View>
   );
 }

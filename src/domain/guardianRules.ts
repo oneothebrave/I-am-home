@@ -1,5 +1,4 @@
-import type { GuardianEvent, GuardianStatus } from './types';
-import { buildGuardianSnapshot } from './riskEngine';
+import type { GuardianStatus } from './types';
 
 export function getStatusTone(status: GuardianStatus) {
   const tones = {
@@ -9,8 +8,4 @@ export function getStatusTone(status: GuardianStatus) {
     emergency: { label: '异常', background: '#FFE8E4', foreground: '#8B1D12', accent: '#D94B3D' },
   };
   return tones[status];
-}
-
-export function summarizeRiskReason(events: GuardianEvent[], now = Date.now()) {
-  return buildGuardianSnapshot(events, { now }).riskReason ?? '暂无告警信息。';
 }

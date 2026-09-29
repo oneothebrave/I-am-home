@@ -4,8 +4,9 @@ import type { GuardianGeofence } from '../domain/types';
 import type { CurrentLocationSample } from '../domain/validation';
 import type { GeofenceSyncStatus } from '../native/guardianGeofenceSync';
 import { styles } from '../styles/appStyles';
+import { createId } from '../utils/id';
 
-export type NewCurrentLocationPlace = Pick<GuardianGeofence, 'name' | 'kind' | 'radiusMeters'>;
+export type NewCurrentLocationPlace = Pick<GuardianGeofence, 'id' | 'name' | 'kind' | 'radiusMeters'>;
 
 const radiusOptions = [150, 300, 500] as const;
 const placeOptions: Array<{
@@ -55,6 +56,7 @@ export function PlacesScreen({
   ) => Promise<void>;
 }) {
   const [isAdding, setIsAdding] = useState(false);
+  const [draftId, setDraftId] = useState(() => createId('place'));
   const [locationStatus, setLocationStatus] = useState<'idle' | 'locating' | 'ready' | 'saving'>(
     'idle',
   );
@@ -75,6 +77,7 @@ export function PlacesScreen({
       : syncCopy[geofenceSyncStatus];
 
   const resetForm = () => {
+    setDraftId(createId('place'));
     setIsAdding(false);
     setLocationStatus('idle');
     setSample(undefined);
@@ -132,11 +135,11 @@ export function PlacesScreen({
 
   const savePlace = async () => {
     const name = (isCustomName ? customName : placeName).trim();
-    if (!sample || !name || geofences.length >= 20) return;
+    if (!sample || !name || (geofences.length >= 20 && !geofences.some((value) => value.id === draftId))) return;
     setLocationStatus('saving');
     setError('');
     try {
-      await onSaveCurrentLocation({ name, kind: placeKind, radiusMeters }, sample);
+      await onSaveCurrentLocation({ id: draftId, name, kind: placeKind, radiusMeters }, sample);
       resetForm();
       setMessage(`${name}已添加，周围 ${radiusMeters} 米将自动守护。`);
     } catch (saveError) {
